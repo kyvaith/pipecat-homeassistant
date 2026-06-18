@@ -27,9 +27,9 @@ import {
 import "./styles.css";
 
 const API = {
-  config: "/api/assist/config",
-  status: "/api/assist/status",
-  mcp: "/api/assist/mcp/check",
+  config: "api/assist/config",
+  status: "api/assist/status",
+  mcp: "api/assist/mcp/check",
 };
 
 const REDACTED = "__redacted__";
@@ -153,7 +153,7 @@ function slugify(value) {
 }
 
 function clone(value) {
-  return structuredClone(value);
+  return JSON.parse(JSON.stringify(value));
 }
 
 function makeStep(kind, label, integrationId = "", suffix = "") {
@@ -272,10 +272,11 @@ function App() {
   const [selectedStepId, setSelectedStepId] = useState("");
   const [selectedIntegrationId, setSelectedIntegrationId] = useState("openai");
   const [message, setMessage] = useState({ text: "", tone: "" });
+  const [fatalError, setFatalError] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    load();
+    load().catch((err) => setFatalError(String(err)));
   }, []);
 
   const selectedFlow = useMemo(() => {
@@ -301,7 +302,14 @@ function App() {
   }, [config, selectedIntegrationId]);
 
   async function load() {
+    setFatalError("");
     const [configResponse, statusResponse] = await Promise.all([fetch(API.config), fetch(API.status)]);
+    if (!configResponse.ok) {
+      throw new Error(`Config API failed: ${configResponse.status}`);
+    }
+    if (!statusResponse.ok) {
+      throw new Error(`Status API failed: ${statusResponse.status}`);
+    }
     const nextConfig = ensureShape(await configResponse.json());
     setConfig(nextConfig);
     setStatus(await statusResponse.json());
@@ -498,8 +506,18 @@ function App() {
   if (!config || !selectedFlow) {
     return (
       <main className="loading">
-        <img src="/assets/logo.svg" alt="" />
-        <span>Loading</span>
+        <img src="assets/logo.svg" alt="" />
+        {fatalError ? (
+          <>
+            <strong>Interface did not load</strong>
+            <span>{fatalError}</span>
+            <Button icon={RefreshCw} variant="secondary" onClick={() => load().catch((err) => setFatalError(String(err)))}>
+              Retry
+            </Button>
+          </>
+        ) : (
+          <span>Loading</span>
+        )}
       </main>
     );
   }
@@ -508,7 +526,7 @@ function App() {
     <div className="app-shell">
       <aside className="nav">
         <div className="brand">
-          <img src="/assets/logo.svg" alt="" />
+          <img src="assets/logo.svg" alt="" />
           <div>
             <h1>Pipecat Assist</h1>
             <span className={status?.ok ? "state ok" : "state"}>{status?.ok ? "ready" : "offline"}</span>

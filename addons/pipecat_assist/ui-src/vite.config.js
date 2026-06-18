@@ -2,7 +2,7 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  base: "/assets/",
+  base: "./",
   plugins: [react()],
   build: {
     assetsDir: ".",

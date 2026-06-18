@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2
+
+- Fixed the React UI asset and API paths for Home Assistant Ingress.
+- Added explicit routes for the React entrypoint assets used by the Ingress
+  relative bundle.
+- Added a visible loading error state instead of leaving the UI blank when
+  config/status requests fail.
+- Replaced `structuredClone` usage in the UI with a broader browser-compatible
+  clone helper.
+
 ## 0.1.1
 
 - Replaced the original static settings page with a React pipeline editor.

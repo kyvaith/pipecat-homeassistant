@@ -82,6 +82,13 @@ async def index():
     return FileResponse(UI_DIR / "index.html")
 
 
+@app.get("/index.js", include_in_schema=False)
+@app.get("/index.css", include_in_schema=False)
+@app.get("/logo.svg", include_in_schema=False)
+async def ui_asset(request: Request):
+    return FileResponse(UI_DIR / request.url.path.lstrip("/"))
+
+
 def _offer_url(config: RuntimeConfig, request: Request) -> str:
     host = config.runner_host
     if host in {"0.0.0.0", "::", ""}:
