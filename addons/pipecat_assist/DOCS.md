@@ -47,3 +47,8 @@ add the integration in Home Assistant. Set the add-on URL to
 `http://127.0.0.1:7860` or the Home Assistant LAN URL if the integration cannot
 reach loopback in your installation.
 
+## Branding assets
+
+Home Assistant uses `icon.png` and `logo.png` from this add-on directory in the
+Supervisor app listing. Home Assistant 2026.3 and newer also read the local
+integration brand files from `custom_components/pipecat_assist/brand`.
