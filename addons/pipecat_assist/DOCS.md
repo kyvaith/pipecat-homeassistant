@@ -30,11 +30,14 @@ Home Assistant MCP.
 
 `Runtime`
 : Configure Home Assistant MCP access, the satellite public host, and the
-shared satellite secret.
+shared satellite secret. The Runtime page also includes a browser voice test
+that connects to the selected pipeline through the same SmallWebRTC offer route
+used by satellites.
 
 ## Gemini Live
 
-For a Gemini Live setup and Home Assistant Assist test path, see
+For a Gemini Live setup, browser voice test, and Home Assistant Assist test
+path, see
 `docs/gemini-live-home-assistant.md` in the repository.
 
 ## Pipecat ESP32

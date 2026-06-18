@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- Made Gemini Live the first-run default pipeline and provider configuration.
+- Added a Runtime voice test that connects from the browser through
+  SmallWebRTC and exercises the selected pipeline.
+- Added an Ingress-friendly relative offer endpoint for browser voice tests.
+- Rewrote the Gemini Live Home Assistant setup and test guide in English.
+
 ## 0.1.3
 
 - Added Gemini Live realtime runtime support through Pipecat's Google service.

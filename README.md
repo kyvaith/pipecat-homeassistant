@@ -64,7 +64,7 @@ flowchart LR
    `PIPECAT_SMALLWEBRTC_URL`.
 
 For a complete Google Gemini Live setup and Home Assistant Assist test path,
-see [Gemini Live w Home Assistant](docs/gemini-live-home-assistant.md).
+see [Gemini Live in Home Assistant](docs/gemini-live-home-assistant.md).
 
 The add-on uses `SUPERVISOR_TOKEN` when `homeassistant_api: true` is enabled.
 If that token is not accepted by your MCP configuration, use a Home Assistant

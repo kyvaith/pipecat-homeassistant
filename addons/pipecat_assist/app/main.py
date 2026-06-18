@@ -105,6 +105,12 @@ def _offer_url(config: RuntimeConfig, request: Request) -> str:
     return f"http://{host}:{config.runner_port}/api/offer{suffix}"
 
 
+def _offer_path(config: RuntimeConfig) -> str:
+    token = quote(config.satellite_shared_secret)
+    suffix = f"?token={token}" if token else ""
+    return f"api/offer{suffix}"
+
+
 @app.get("/api/assist/status")
 async def api_status(request: Request):
     config = STORE.load()
@@ -116,6 +122,7 @@ async def api_status(request: Request):
             "port": config.runner_port,
             "esp32_mode": config.esp32_mode,
             "offer_url": _offer_url(config, request),
+            "offer_path": _offer_path(config),
         },
         "selected_flow_id": config.selected_flow_id,
         "flow_count": len(config.flows),
@@ -129,6 +136,7 @@ async def api_get_config(request: Request):
     config = STORE.load()
     data = config.public_dict()
     data["runner_offer_url"] = _offer_url(config, request)
+    data["runner_offer_path"] = _offer_path(config)
     return data
 
 
@@ -137,6 +145,7 @@ async def api_update_config(payload: dict[str, Any], request: Request):
     config = STORE.update_from_public(payload)
     data = config.public_dict()
     data["runner_offer_url"] = _offer_url(config, request)
+    data["runner_offer_path"] = _offer_path(config)
     return data
 
 

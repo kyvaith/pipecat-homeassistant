@@ -429,6 +429,59 @@ button:disabled {
   background: var(--line);
 }
 
+.voice-test {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: white;
+}
+
+.voice-pulse {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--charcoal);
+  background: var(--soft);
+}
+
+.voice-pulse.active {
+  color: white;
+  border-color: var(--green);
+  background: var(--green);
+  box-shadow: 0 0 0 6px rgba(44, 182, 125, 0.16);
+}
+
+.voice-copy {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.voice-copy strong {
+  font-size: 14px;
+}
+
+.voice-copy span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-copy audio {
+  width: 100%;
+  max-width: 420px;
+  height: 32px;
+}
+
 .dot {
   width: 10px;
   height: 10px;
@@ -485,6 +538,10 @@ button:disabled {
   }
 
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .voice-test {
     grid-template-columns: 1fr;
   }
 }

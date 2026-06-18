@@ -117,16 +117,6 @@ def default_integrations() -> list[IntegrationConfig]:
 
     return [
         IntegrationConfig(
-            id="openai",
-            name="OpenAI",
-            kind="openai",
-            enabled=bool(os.getenv("OPENAI_API_KEY")),
-            api_key=os.getenv("OPENAI_API_KEY", ""),
-            default_model=os.getenv("TEXT_MODEL", "gpt-5.4-mini"),
-            default_realtime_model=os.getenv("REALTIME_MODEL", "gpt-realtime-2"),
-            default_voice=os.getenv("REALTIME_VOICE", "marin"),
-        ),
-        IntegrationConfig(
             id="gemini",
             name="Google Gemini",
             kind="gemini",
@@ -135,6 +125,16 @@ def default_integrations() -> list[IntegrationConfig]:
             default_model=os.getenv("GEMINI_TEXT_MODEL", DEFAULT_GEMINI_TEXT_MODEL),
             default_realtime_model=os.getenv("GEMINI_LIVE_MODEL", DEFAULT_GEMINI_LIVE_MODEL),
             default_voice=os.getenv("GEMINI_LIVE_VOICE", DEFAULT_GEMINI_LIVE_VOICE),
+        ),
+        IntegrationConfig(
+            id="openai",
+            name="OpenAI",
+            kind="openai",
+            enabled=bool(os.getenv("OPENAI_API_KEY")),
+            api_key=os.getenv("OPENAI_API_KEY", ""),
+            default_model=os.getenv("TEXT_MODEL", "gpt-5.4-mini"),
+            default_realtime_model=os.getenv("REALTIME_MODEL", "gpt-realtime-2"),
+            default_voice=os.getenv("REALTIME_VOICE", "marin"),
         ),
         IntegrationConfig(
             id="anthropic",
@@ -190,15 +190,15 @@ def default_steps() -> list[PipelineStepConfig]:
         PipelineStepConfig(
             id="vad",
             kind="vad",
-            label="Turn detection",
+            label="Gemini VAD",
             settings={"mode": "semantic_vad", "eagerness": "low"},
         ),
         PipelineStepConfig(
             id="llm",
             kind="llm",
-            label="Realtime model",
-            integration_id="openai",
-            model=os.getenv("REALTIME_MODEL", "gpt-realtime-2"),
+            label="Live model",
+            integration_id="gemini",
+            model=os.getenv("GEMINI_LIVE_MODEL", DEFAULT_GEMINI_LIVE_MODEL),
         ),
         PipelineStepConfig(
             id="tools",
@@ -209,9 +209,9 @@ def default_steps() -> list[PipelineStepConfig]:
         PipelineStepConfig(
             id="output",
             kind="output",
-            label="Audio output",
-            integration_id="openai",
-            voice=os.getenv("REALTIME_VOICE", "marin"),
+            label="Native audio",
+            integration_id="gemini",
+            voice=os.getenv("GEMINI_LIVE_VOICE", DEFAULT_GEMINI_LIVE_VOICE),
         ),
     ]
 
@@ -220,7 +220,7 @@ class FlowConfig(BaseModel):
     """One realtime assistant pipeline."""
 
     id: str = "home-default"
-    name: str = "Home Assistant realtime"
+    name: str = "Gemini Live Home Assistant"
     enabled: bool = True
     mode: Literal["realtime", "classic", "text"] = "realtime"
     pipeline_template: Literal[
@@ -229,11 +229,11 @@ class FlowConfig(BaseModel):
         "cloud_cascade",
         "local_first",
         "custom",
-    ] = "realtime_home"
-    provider_id: str = "openai"
-    model: str = "gpt-realtime-2"
-    text_model: str = "gpt-5.4-mini"
-    voice: str = "marin"
+    ] = "gemini_live_home"
+    provider_id: str = "gemini"
+    model: str = DEFAULT_GEMINI_LIVE_MODEL
+    text_model: str = DEFAULT_GEMINI_TEXT_MODEL
+    voice: str = DEFAULT_GEMINI_LIVE_VOICE
     speed: float = Field(default=1.0, ge=0.25, le=1.5)
     language: str | None = None
     instructions: str = DEFAULT_INSTRUCTIONS
@@ -264,9 +264,9 @@ class FlowConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 2
+    version: int = 3
     openai_api_key: str = ""
-    text_model: str = "gpt-5.4-mini"
+    text_model: str = DEFAULT_GEMINI_TEXT_MODEL
     ha_mcp_url: str = ""
     longlived_token: str = ""
     satellite_shared_secret: str = ""
@@ -382,15 +382,15 @@ def default_config_from_environment() -> RuntimeConfig:
     instructions = os.getenv("INSTRUCTIONS") or DEFAULT_INSTRUCTIONS
     tool_allowlist = _split_csv(os.getenv("MCP_TOOL_ALLOWLIST"))
     flow = FlowConfig(
-        model=os.getenv("REALTIME_MODEL", "gpt-realtime-2"),
-        text_model=os.getenv("TEXT_MODEL", "gpt-5.4-mini"),
-        voice=os.getenv("REALTIME_VOICE", "marin"),
+        model=os.getenv("GEMINI_LIVE_MODEL", DEFAULT_GEMINI_LIVE_MODEL),
+        text_model=os.getenv("GEMINI_TEXT_MODEL", DEFAULT_GEMINI_TEXT_MODEL),
+        voice=os.getenv("GEMINI_LIVE_VOICE", DEFAULT_GEMINI_LIVE_VOICE),
         instructions=instructions,
         mcp_tool_allowlist=tool_allowlist,
     )
     return RuntimeConfig(
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
-        text_model=os.getenv("TEXT_MODEL", "gpt-5.4-mini"),
+        text_model=os.getenv("GEMINI_TEXT_MODEL", DEFAULT_GEMINI_TEXT_MODEL),
         ha_mcp_url=os.getenv("HA_MCP_URL", ""),
         longlived_token=os.getenv("LONGLIVED_TOKEN", ""),
         satellite_shared_secret=os.getenv("SATELLITE_SHARED_SECRET", ""),
@@ -399,6 +399,40 @@ def default_config_from_environment() -> RuntimeConfig:
         esp32_mode=_env_bool("ESP32_MODE", False),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         flows=[flow],
+    )
+
+
+def _looks_like_legacy_openai_default(flow: FlowConfig) -> bool:
+    """Return true for the untouched pre-0.1.4 OpenAI first-run flow."""
+
+    model_step = flow.model_step()
+    return (
+        flow.id == "home-default"
+        and flow.pipeline_template == "realtime_home"
+        and flow.provider_id == "openai"
+        and flow.model in {"", "gpt-realtime-2"}
+        and flow.text_model in {"", "gpt-5.4-mini"}
+        and flow.voice in {"", "marin"}
+        and model_step is not None
+        and model_step.integration_id == "openai"
+    )
+
+
+def _gemini_flow_from_existing(flow: FlowConfig) -> FlowConfig:
+    """Preserve user text fields while migrating the default flow to Gemini Live."""
+
+    return FlowConfig(
+        id=flow.id,
+        name="Gemini Live Home Assistant",
+        instructions=flow.instructions,
+        greeting=flow.greeting,
+        language=flow.language,
+        mcp_enabled=flow.mcp_enabled,
+        mcp_tool_allowlist=flow.mcp_tool_allowlist,
+        video_enabled=flow.video_enabled,
+        interrupt_response=flow.interrupt_response,
+        max_output_tokens=flow.max_output_tokens,
+        reasoning_effort=flow.reasoning_effort,
     )
 
 
@@ -425,6 +459,13 @@ class ConfigStore:
         config = RuntimeConfig.model_validate(data)
 
         changed = False
+        integration_ids = {item.id for item in config.integrations}
+        for integration in default.integrations:
+            if integration.id not in integration_ids:
+                config.integrations.append(integration)
+                integration_ids.add(integration.id)
+                changed = True
+
         for key in ("runner_port", "esp32_mode", "log_level"):
             default_value = getattr(default, key)
             if getattr(config, key) != default_value:
@@ -471,8 +512,11 @@ class ConfigStore:
             )
             changed = True
 
-        if config.version < 2:
-            config.version = 2
+        if config.version < 3:
+            config.version = 3
+            if config.flows and _looks_like_legacy_openai_default(config.flows[0]):
+                config.flows[0] = _gemini_flow_from_existing(config.flows[0])
+                config.selected_flow_id = config.flows[0].id
             changed = True
 
         if changed:

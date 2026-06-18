@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertCircle,
@@ -61,21 +61,6 @@ const stepTypes = [
 
 const templates = [
   {
-    id: "realtime_home",
-    label: "Realtime Home",
-    icon: Radio,
-    mode: "realtime",
-    provider: "openai",
-    accent: "green",
-    steps: [
-      ["transport", "transport", "SmallWebRTC", ""],
-      ["vad", "vad", "Semantic VAD", ""],
-      ["llm", "llm", "Realtime model", "openai"],
-      ["tools", "tools", "HA MCP tools", "ha-mcp"],
-      ["output", "output", "Audio output", "openai"],
-    ],
-  },
-  {
     id: "gemini_live_home",
     label: "Gemini Live",
     icon: Cloud,
@@ -88,6 +73,21 @@ const templates = [
       ["llm", "llm", "Live model", "gemini"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["output", "output", "Native audio", "gemini"],
+    ],
+  },
+  {
+    id: "realtime_home",
+    label: "Realtime Home",
+    icon: Radio,
+    mode: "realtime",
+    provider: "openai",
+    accent: "green",
+    steps: [
+      ["transport", "transport", "SmallWebRTC", ""],
+      ["vad", "vad", "Semantic VAD", ""],
+      ["llm", "llm", "Realtime model", "openai"],
+      ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["output", "output", "Audio output", "openai"],
     ],
   },
   {
@@ -136,14 +136,14 @@ const templates = [
 
 const defaultFlow = {
   id: "home-default",
-  name: "Home Assistant realtime",
+  name: "Gemini Live Home Assistant",
   enabled: true,
   mode: "realtime",
-  pipeline_template: "realtime_home",
-  provider_id: "openai",
-  model: "gpt-realtime-2",
-  text_model: "gpt-5.4-mini",
-  voice: "marin",
+  pipeline_template: "gemini_live_home",
+  provider_id: "gemini",
+  model: GEMINI_LIVE_MODEL,
+  text_model: GEMINI_TEXT_MODEL,
+  voice: GEMINI_LIVE_VOICE,
   speed: 1,
   language: "",
   instructions:
@@ -228,7 +228,7 @@ function ensureShape(config) {
   shaped.integrations ||= [];
   shaped.flows = (shaped.flows?.length ? shaped.flows : [clone(defaultFlow)]).map((flow) => {
     const merged = { ...clone(defaultFlow), ...flow };
-    if (!merged.steps?.length) return applyTemplate(merged, merged.pipeline_template || "realtime_home");
+    if (!merged.steps?.length) return applyTemplate(merged, merged.pipeline_template || "gemini_live_home");
     return merged;
   });
   shaped.selected_flow_id ||= shaped.flows[0].id;
@@ -242,7 +242,7 @@ function syncFlow(flow) {
   );
   return {
     ...flow,
-    provider_id: llm?.integration_id || flow.provider_id || "openai",
+    provider_id: llm?.integration_id || flow.provider_id || "gemini",
     model: llm?.model || flow.model || "",
     voice: output?.voice || flow.voice || "",
     language: flow.language || null,
@@ -301,7 +301,7 @@ function App() {
   const [status, setStatus] = useState(null);
   const [tab, setTab] = useState("pipelines");
   const [selectedStepId, setSelectedStepId] = useState("");
-  const [selectedIntegrationId, setSelectedIntegrationId] = useState("openai");
+  const [selectedIntegrationId, setSelectedIntegrationId] = useState("gemini");
   const [message, setMessage] = useState({ text: "", tone: "" });
   const [fatalError, setFatalError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -397,7 +397,7 @@ function App() {
         id,
         name: baseName,
       },
-      "realtime_home",
+      "gemini_live_home",
     );
     updateConfig((draft) => {
       draft.flows.push(flow);
@@ -478,7 +478,7 @@ function App() {
   }
 
   function deleteIntegration(integrationId) {
-    if (["openai", "ha-mcp"].includes(integrationId)) return;
+    if (["gemini", "openai", "ha-mcp"].includes(integrationId)) return;
     updateConfig((draft) => {
       draft.integrations = draft.integrations.filter((item) => item.id !== integrationId);
       draft.flows = draft.flows.map((flow) => ({
@@ -489,7 +489,7 @@ function App() {
       }));
       return draft;
     });
-    setSelectedIntegrationId("openai");
+    setSelectedIntegrationId("gemini");
   }
 
   async function save() {
@@ -648,6 +648,7 @@ function App() {
         {tab === "runtime" && (
           <RuntimeView
             config={config}
+            flow={selectedFlow}
             status={status}
             checkMcp={checkMcp}
             copyOfferUrl={copyOfferUrl}
@@ -955,7 +956,7 @@ function IntegrationsView({
               icon={Trash2}
               variant="danger"
               onClick={() => deleteIntegration(selectedIntegration.id)}
-              disabled={["openai", "ha-mcp"].includes(selectedIntegration.id)}
+              disabled={["gemini", "openai", "ha-mcp"].includes(selectedIntegration.id)}
             />
           </div>
 
@@ -1075,7 +1076,230 @@ function IntegrationsView({
   );
 }
 
-function RuntimeView({ config, status, checkMcp, copyOfferUrl, updateConfig, updateIntegration }) {
+function offerPath(config) {
+  if (config.runner_offer_path) return config.runner_offer_path;
+  try {
+    const url = new URL(config.runner_offer_url || "api/offer", window.location.href);
+    const token = url.searchParams.get("token");
+    return `api/offer${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+  } catch {
+    return "api/offer";
+  }
+}
+
+function waitForIceGatheringComplete(peerConnection, timeoutMs = 2500) {
+  if (peerConnection.iceGatheringState === "complete") return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let done = false;
+    let timer;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      peerConnection.removeEventListener("icegatheringstatechange", onChange);
+      resolve();
+    };
+    const onChange = () => {
+      if (peerConnection.iceGatheringState === "complete") finish();
+    };
+    timer = setTimeout(finish, timeoutMs);
+    peerConnection.addEventListener("icegatheringstatechange", onChange);
+  });
+}
+
+function VoiceTest({ config, flow }) {
+  const audioRef = useRef(null);
+  const channelRef = useRef(null);
+  const closingRef = useRef(false);
+  const pingRef = useRef(null);
+  const peerRef = useRef(null);
+  const readySentRef = useRef(false);
+  const streamRef = useRef(null);
+  const trackReadyRef = useRef(false);
+  const [state, setState] = useState("idle");
+  const [detail, setDetail] = useState("Ready");
+
+  useEffect(() => () => disposeSession(), []);
+
+  function disposeSession() {
+    closingRef.current = true;
+    if (pingRef.current) {
+      clearInterval(pingRef.current);
+      pingRef.current = null;
+    }
+    if (channelRef.current?.readyState === "open") {
+      channelRef.current.send(
+        JSON.stringify({
+          label: "rtvi-ai",
+          id: crypto.randomUUID().slice(0, 8),
+          type: "disconnect-bot",
+          data: {},
+        }),
+      );
+    }
+    channelRef.current?.close();
+    channelRef.current = null;
+    readySentRef.current = false;
+    peerRef.current?.close();
+    peerRef.current = null;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    trackReadyRef.current = false;
+    if (audioRef.current) audioRef.current.srcObject = null;
+  }
+
+  function clearSession(nextState = "idle", nextDetail = "Ready") {
+    disposeSession();
+    setState(nextState);
+    setDetail(nextDetail);
+    window.setTimeout(() => {
+      closingRef.current = false;
+    }, 0);
+  }
+
+  function stopVoiceTest(updateState = true) {
+    clearSession(updateState ? "idle" : state, updateState ? "Stopped" : detail);
+  }
+
+  async function startVoiceTest() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setState("error");
+      setDetail("This browser cannot access a microphone from the current context.");
+      return;
+    }
+
+    clearSession("requesting", "Waiting for microphone permission");
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+        video: false,
+      });
+      streamRef.current = stream;
+
+      const peerConnection = new RTCPeerConnection();
+      peerRef.current = peerConnection;
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack) {
+        peerConnection.addTransceiver(audioTrack, { direction: "sendrecv" });
+      } else {
+        peerConnection.addTransceiver("audio", { direction: "sendrecv" });
+      }
+
+      const channel = peerConnection.createDataChannel("signalling");
+      channelRef.current = channel;
+      const sendClientReady = () => {
+        if (!trackReadyRef.current || readySentRef.current || channel.readyState !== "open") return;
+        channel.send(
+          JSON.stringify({
+            label: "rtvi-ai",
+            id: crypto.randomUUID().slice(0, 8),
+            type: "client-ready",
+            data: {
+              version: "1.4.0",
+              about: {
+                library: "pipecat-assist-ui",
+                library_version: "0.1.4",
+                platform: "browser",
+              },
+            },
+          }),
+        );
+        readySentRef.current = true;
+      };
+      channel.onopen = () => {
+        pingRef.current = window.setInterval(() => {
+          if (channel.readyState === "open") channel.send(`ping ${Date.now()}`);
+        }, 1000);
+        sendClientReady();
+      };
+
+      peerConnection.ontrack = (event) => {
+        if (event.track.kind !== "audio") return;
+        if (!audioRef.current) return;
+        audioRef.current.srcObject = event.streams[0] || new MediaStream([event.track]);
+        audioRef.current.play().catch(() => {});
+        trackReadyRef.current = true;
+        sendClientReady();
+      };
+
+      peerConnection.onconnectionstatechange = () => {
+        const next = peerConnection.connectionState;
+        if (next === "connected") {
+          setState("connected");
+          setDetail("Connected. Speak to the selected assistant.");
+        }
+        if (["failed", "disconnected", "closed"].includes(next) && !closingRef.current) {
+          clearSession(next === "failed" ? "error" : "idle", `WebRTC ${next}`);
+        }
+      };
+
+      setState("connecting");
+      setDetail("Creating WebRTC offer");
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      await waitForIceGatheringComplete(peerConnection);
+
+      const response = await fetch(offerPath(config), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sdp: peerConnection.localDescription.sdp,
+          type: peerConnection.localDescription.type,
+          request_data: {
+            flow_id: flow.id,
+            source: "ui_voice_test",
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const answer = await response.json();
+      await peerConnection.setRemoteDescription({
+        sdp: answer.sdp,
+        type: answer.type,
+      });
+      setDetail("Connecting audio");
+    } catch (err) {
+      clearSession("error", err?.message || String(err));
+    }
+  }
+
+  const running = ["requesting", "connecting", "connected"].includes(state);
+  const stateLabel = {
+    connected: "Connected",
+    connecting: "Connecting",
+    error: "Needs attention",
+    idle: "Idle",
+    requesting: "Microphone",
+  }[state];
+
+  return (
+    <div className="voice-test">
+      <div className={running ? "voice-pulse active" : "voice-pulse"}>
+        <Mic2 size={22} />
+      </div>
+      <div className="voice-copy">
+        <strong>{stateLabel}</strong>
+        <span>{detail}</span>
+        <audio ref={audioRef} autoPlay controls />
+      </div>
+      <Button icon={running ? X : Mic2} variant={running ? "danger" : "primary"} onClick={running ? () => stopVoiceTest() : startVoiceTest}>
+        {running ? "Stop voice test" : "Start voice test"}
+      </Button>
+    </div>
+  );
+}
+
+function RuntimeView({ config, flow, status, checkMcp, copyOfferUrl, updateConfig, updateIntegration }) {
   const mcp = config.integrations.find((integration) => integration.kind === "home_assistant_mcp");
   return (
     <div className="workspace-grid">
@@ -1106,6 +1330,14 @@ function RuntimeView({ config, status, checkMcp, copyOfferUrl, updateConfig, upd
             />
           </Field>
         </div>
+        <div className="divider" />
+        <div className="panel-head">
+          <div>
+            <h3>Voice test</h3>
+            <span>{flow.name}</span>
+          </div>
+        </div>
+        <VoiceTest config={config} flow={flow} />
       </section>
 
       <section className="panel inspector">
