@@ -14,7 +14,7 @@ There are two useful test paths:
 
 ## Requirements
 
-- Pipecat Assist 0.1.8 or newer.
+- Pipecat Assist 0.1.9 or newer.
 - Home Assistant with the Model Context Protocol Server integration enabled.
 - A Google AI Studio API key with access to the Gemini Live API.
 - The `custom_components/pipecat_assist` integration installed if you want to
@@ -26,7 +26,7 @@ the add-on image includes `pipecat-ai[google]`.
 
 ## Configure The Add-On
 
-1. Update Pipecat Assist to version 0.1.8 or newer.
+1. Update Pipecat Assist to version 0.1.9 or newer.
 2. Start the add-on and open the Pipecat Assist web UI.
 3. In Home Assistant, enable **Model Context Protocol Server**.
 4. Open **Runtime > Home Assistant**:

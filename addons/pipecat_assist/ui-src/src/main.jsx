@@ -26,12 +26,21 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
+function documentBaseUrl() {
+  const script = [...document.scripts].find((item) => item.src && item.src.endsWith("/index.js"));
+  return script ? new URL("./", script.src).href : new URL("./", window.location.href).href;
+}
+
+function appUrl(path) {
+  return new URL(path, documentBaseUrl()).href;
+}
+
 const API = {
-  config: "api/assist/config",
-  status: "api/assist/status",
-  mcp: "api/assist/mcp/check",
-  oauthStart: "api/assist/oauth/start",
-  oauthDisconnect: "api/assist/oauth/disconnect",
+  config: appUrl("api/assist/config"),
+  status: appUrl("api/assist/status"),
+  mcp: appUrl("api/assist/mcp/check"),
+  oauthStart: appUrl("api/assist/oauth/start"),
+  oauthDisconnect: appUrl("api/assist/oauth/disconnect"),
 };
 
 const REDACTED = "__redacted__";
@@ -279,7 +288,7 @@ function secretPlaceholder(item, key, fallback = "") {
   return secretStatus(item, key) === "configured" ? "configured" : fallback;
 }
 
-function currentAppBaseUrl() {
+function currentVisibleUrl() {
   const candidates = [];
   for (const frame of [window.top, window.parent, window]) {
     try {
@@ -299,6 +308,10 @@ function currentAppBaseUrl() {
     url.pathname = `${url.pathname}/`;
   }
   return url.href;
+}
+
+function oauthApiBaseUrl() {
+  return appUrl("api/assist/");
 }
 
 function integrationSummary(integration) {
@@ -592,8 +605,6 @@ function App() {
   }
 
   async function startMcpOAuth() {
-    const clientBase = currentAppBaseUrl();
-    const redirectUri = new URL("api/assist/oauth/callback", clientBase).href;
     const authorizeUrl = new URL("/auth/authorize", window.location.origin).href;
     const response = await fetch(API.oauthStart, {
       method: "POST",
@@ -601,8 +612,8 @@ function App() {
       body: JSON.stringify({
         ha_url: window.location.origin,
         authorize_url: authorizeUrl,
-        client_id: clientBase,
-        redirect_uri: redirectUri,
+        api_base_url: oauthApiBaseUrl(),
+        return_url: currentVisibleUrl(),
       }),
     });
     if (!response.ok) {
@@ -1266,13 +1277,13 @@ function SecretSetting({ integration, field, label, updateIntegration, wide = fa
 }
 
 function offerPath(config) {
-  if (config.runner_offer_path) return config.runner_offer_path;
+  if (config.runner_offer_path) return appUrl(config.runner_offer_path);
   try {
     const url = new URL(config.runner_offer_url || "api/offer", window.location.href);
     const token = url.searchParams.get("token");
-    return `api/offer${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    return appUrl(`api/offer${token ? `?token=${encodeURIComponent(token)}` : ""}`);
   } catch {
-    return "api/offer";
+    return appUrl("api/offer");
   }
 }
 
@@ -1496,7 +1507,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
               about: {
                 library: "pipecat-assist-ui",
-                library_version: "0.1.8",
+                library_version: "0.1.9",
                 platform: "browser",
               },
             },

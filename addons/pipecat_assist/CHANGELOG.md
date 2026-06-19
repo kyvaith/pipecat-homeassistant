@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.9
+
+- Moved Home Assistant OAuth client ID generation to a dedicated add-on
+  endpoint (`/api/assist/oauth/client`) with an IndieAuth redirect link.
+- Generated OAuth callback URLs from the actual add-on API base path instead
+  of the Home Assistant frontend app path.
+
 ## 0.1.8
 
 - Fixed Home Assistant OAuth redirect URL generation for app/Ingress paths

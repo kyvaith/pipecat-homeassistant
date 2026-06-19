@@ -11,7 +11,7 @@ from contextlib import suppress
 from html import escape
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
@@ -121,6 +121,36 @@ def _offer_path(config: RuntimeConfig) -> str:
     return f"api/offer{suffix}"
 
 
+def _first_header_value(value: str | None) -> str:
+    return (value or "").split(",", 1)[0].strip()
+
+
+def _oauth_api_base_from_request(request: Request) -> str:
+    proto = _first_header_value(request.headers.get("x-forwarded-proto")) or request.url.scheme
+    host = (
+        _first_header_value(request.headers.get("x-forwarded-host"))
+        or request.headers.get("host")
+        or request.url.netloc
+    )
+    ingress_path = (request.headers.get("x-ingress-path") or "").strip()
+    if ingress_path:
+        base_path = f"{ingress_path.rstrip('/')}/api/assist/"
+    else:
+        base_path = "/api/assist/"
+    return f"{proto}://{host}{base_path}"
+
+
+def _validated_oauth_api_base(value: str, request: Request) -> str:
+    candidate = (value or "").strip() or _oauth_api_base_from_request(request)
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="api_base_url must be an absolute http(s) URL")
+    path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
+    if not path.endswith("/api/assist/"):
+        path = urljoin(path, "api/assist/")
+    return parsed._replace(path=path, params="", query="", fragment="").geturl()
+
+
 @app.get("/api/assist/status")
 async def api_status(request: Request):
     config = STORE.load()
@@ -173,13 +203,14 @@ async def api_check_mcp(payload: dict[str, Any] | None = None):
 
 
 @app.post("/api/assist/oauth/start")
-async def api_oauth_start(payload: dict[str, Any]):
+async def api_oauth_start(payload: dict[str, Any], request: Request):
     ha_url = str(payload.get("ha_url") or "").rstrip("/")
     authorize_url = str(payload.get("authorize_url") or "")
-    client_id = str(payload.get("client_id") or "")
-    redirect_uri = str(payload.get("redirect_uri") or "")
-    if not ha_url or not authorize_url or not client_id or not redirect_uri:
-        raise HTTPException(status_code=400, detail="ha_url, authorize_url, client_id and redirect_uri are required")
+    if not ha_url or not authorize_url:
+        raise HTTPException(status_code=400, detail="ha_url and authorize_url are required")
+    oauth_api_base = _validated_oauth_api_base(str(payload.get("api_base_url") or ""), request)
+    client_id = urljoin(oauth_api_base, "oauth/client")
+    redirect_uri = urljoin(oauth_api_base, "oauth/callback")
     token_url = oauth_token_url_for_store(STORE, ha_url, str(payload.get("token_url") or ""))
     auth_url = build_authorize_url(
         authorize_url=authorize_url,
@@ -188,6 +219,22 @@ async def api_oauth_start(payload: dict[str, Any]):
         token_url=token_url,
     )
     return {"auth_url": auth_url, "client_id": client_id, "redirect_uri": redirect_uri}
+
+
+@app.get("/api/assist/oauth/client", include_in_schema=False)
+async def api_oauth_client(request: Request):
+    callback_url = urljoin(_validated_oauth_api_base("", request), "oauth/callback")
+    safe_callback = escape(callback_url, quote=True)
+    return HTMLResponse(
+        "<!doctype html><html><head>"
+        "<meta charset=\"utf-8\">"
+        "<title>Pipecat Assist OAuth Client</title>"
+        f"<link rel=\"redirect_uri\" href=\"{safe_callback}\">"
+        "</head><body>"
+        "<h1>Pipecat Assist OAuth Client</h1>"
+        f"<p>Redirect URI: {safe_callback}</p>"
+        "</body></html>"
+    )
 
 
 @app.get("/api/assist/oauth/callback", include_in_schema=False)
