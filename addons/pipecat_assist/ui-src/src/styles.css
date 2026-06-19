@@ -435,6 +435,7 @@ button:disabled {
   gap: 8px;
   color: white;
   background: var(--charcoal);
+  text-decoration: none;
 }
 
 .button.secondary {
@@ -513,6 +514,63 @@ button:disabled {
   height: 32px;
 }
 
+.recording-list {
+  display: grid;
+  gap: 8px;
+}
+
+.recording-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: white;
+}
+
+.recording-meta {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.recording-meta strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recording-meta span,
+.recording-empty,
+.empty-state {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.recording-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.recording-empty {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 8px;
+}
+
+.empty-state {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: white;
+}
+
 .dot {
   width: 10px;
   height: 10px;
@@ -574,5 +632,13 @@ button:disabled {
 
   .voice-test {
     grid-template-columns: 1fr;
+  }
+
+  .recording-row {
+    grid-template-columns: 1fr;
+  }
+
+  .recording-actions {
+    justify-content: flex-start;
   }
 }

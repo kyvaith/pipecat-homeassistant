@@ -10,7 +10,7 @@ Ingress, and exposes a SmallWebRTC endpoint for Pipecat ESP32 satellites.
 
 Open the web UI after starting the add-on to check or reset Home Assistant MCP,
 manage pipelines, configure cloud/local AI integrations, run the browser voice
-test, and copy the satellite URL.
+test, enable optional audio debug captures, and copy the satellite URL.
 
 For Google Gemini Live setup and testing through Home Assistant Assist, see
 `docs/gemini-live-home-assistant.md` in the repository.

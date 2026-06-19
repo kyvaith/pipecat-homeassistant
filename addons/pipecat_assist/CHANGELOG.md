@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.16
+
+- Added optional audio debug capture for realtime voice sessions, writing
+  separate input and output WAV files under `/data/audio-debug`.
+- Added Runtime controls to enable audio capture, set retention, download
+  captured WAV files, and clear stored debug sessions.
+
 ## 0.1.15
 
 - Fixed OpenAI Realtime sessions inheriting Gemini voices such as `Charon`,

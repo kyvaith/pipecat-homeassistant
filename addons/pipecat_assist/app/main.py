@@ -51,6 +51,12 @@ from app.config import (
     OPENAI_REALTIME_VOICES,
     RuntimeConfig,
 )
+from app.audio_debug import (
+    audio_debug_file_path,
+    clear_audio_recordings,
+    create_audio_debug_session,
+    list_audio_recordings,
+)
 from app.mcp_bridge import HomeAssistantMCPBridge, check_mcp
 from app.text_agent import run_text_conversation
 
@@ -185,6 +191,43 @@ async def api_conversation(payload: dict[str, Any]):
         conversation_id=payload.get("conversation_id"),
         flow_id=payload.get("flow_id"),
         mcp_token=config.effective_mcp_token,
+    )
+
+
+@app.get("/api/assist/debug/audio")
+async def api_audio_debug():
+    config = STORE.load()
+    return {
+        "enabled": config.audio_debug_enabled,
+        "keep_sessions": config.audio_debug_keep_sessions,
+        "recordings": list_audio_recordings(),
+    }
+
+
+@app.delete("/api/assist/debug/audio")
+async def api_clear_audio_debug():
+    config = STORE.load()
+    clear_audio_recordings()
+    return {
+        "enabled": config.audio_debug_enabled,
+        "keep_sessions": config.audio_debug_keep_sessions,
+        "recordings": [],
+    }
+
+
+@app.get("/api/assist/debug/audio/{filename}")
+async def api_audio_debug_file(filename: str):
+    try:
+        path = audio_debug_file_path(filename)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Audio debug file not found")
+    return FileResponse(
+        path,
+        media_type="audio/wav",
+        filename=filename,
+        headers=UI_CACHE_HEADERS,
     )
 
 
@@ -471,15 +514,26 @@ async def run_bot(
         realtime_service_mode=True,
     )
 
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            user_aggregator,
-            llm,
-            transport.output(),
-            assistant_aggregator,
-        ]
-    )
+    audio_debug = None
+    if config.audio_debug_enabled:
+        try:
+            audio_debug = create_audio_debug_session(
+                config,
+                flow,
+                provider_kind,
+                realtime_model,
+            )
+        except Exception as err:
+            logger.warning("Audio debug recorder could not start: {}", err)
+    processors = [transport.input()]
+    if audio_debug:
+        processors.append(audio_debug.input_recorder)
+    processors.extend([user_aggregator, llm])
+    if audio_debug:
+        processors.append(audio_debug.output_recorder)
+    processors.extend([transport.output(), assistant_aggregator])
+
+    pipeline = Pipeline(processors)
 
     worker = PipelineWorker(
         pipeline,
@@ -504,6 +558,9 @@ async def run_bot(
     finally:
         if bridge:
             await bridge.close()
+        if audio_debug:
+            with suppress(Exception):
+                audio_debug.close()
 
 
 async def bot(runner_args: RunnerArguments):

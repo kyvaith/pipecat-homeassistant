@@ -7,6 +7,7 @@ import {
   Cloud,
   Copy,
   Cpu,
+  Download,
   GitBranch,
   Home,
   Mic2,
@@ -47,6 +48,7 @@ const API = {
   status: appUrl("api/assist/status"),
   mcp: appUrl("api/assist/mcp/check"),
   mcpReset: appUrl("api/assist/mcp/reset"),
+  audioDebug: appUrl("api/assist/debug/audio"),
 };
 
 const REDACTED = "__redacted__";
@@ -294,6 +296,11 @@ function applyTemplate(flow, templateId) {
 function ensureShape(config) {
   const shaped = clone(config);
   shaped.integrations ||= [];
+  shaped.audio_debug_enabled = Boolean(shaped.audio_debug_enabled);
+  shaped.audio_debug_keep_sessions = Math.min(
+    100,
+    Math.max(1, Number(shaped.audio_debug_keep_sessions || 10)),
+  );
   shaped.flows = (shaped.flows?.length ? shaped.flows : [clone(defaultFlow)]).map((flow) => {
     const merged = { ...clone(defaultFlow), ...flow };
     if (!merged.steps?.length) return applyTemplate(merged, merged.pipeline_template || "gemini_live_home");
@@ -359,6 +366,23 @@ function secretPlaceholder(item, key, fallback = "") {
   return secretStatus(item, key) === "configured" ? "configured" : fallback;
 }
 
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatTimestamp(value) {
+  if (!value) return "running";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "short",
+    timeStyle: "medium",
+  }).format(date);
+}
+
 function integrationSummary(integration) {
   if (!integration.enabled) return "disabled";
   if (integration.kind === "home_assistant_mcp") {
@@ -413,6 +437,7 @@ function Toggle({ checked, onChange, label }) {
 function App() {
   const [config, setConfig] = useState(null);
   const [status, setStatus] = useState(null);
+  const [audioDebug, setAudioDebug] = useState({ recordings: [] });
   const [tab, setTab] = useState("pipelines");
   const [selectedStepId, setSelectedStepId] = useState("");
   const [selectedIntegrationId, setSelectedIntegrationId] = useState("gemini");
@@ -448,7 +473,11 @@ function App() {
 
   async function load() {
     setFatalError("");
-    const [configResponse, statusResponse] = await Promise.all([fetch(API.config), fetch(API.status)]);
+    const [configResponse, statusResponse, audioResponse] = await Promise.all([
+      fetch(API.config),
+      fetch(API.status),
+      fetch(API.audioDebug).catch(() => null),
+    ]);
     if (!configResponse.ok) {
       throw new Error(`Config API failed: ${configResponse.status}`);
     }
@@ -458,6 +487,9 @@ function App() {
     const nextConfig = ensureShape(await configResponse.json());
     setConfig(nextConfig);
     setStatus(await statusResponse.json());
+    if (audioResponse?.ok) {
+      setAudioDebug(await audioResponse.json());
+    }
     const flow = nextConfig.flows.find((item) => item.id === nextConfig.selected_flow_id) || nextConfig.flows[0];
     setSelectedStepId(flow.steps.find((step) => step.kind === "llm")?.id || flow.steps[0]?.id || "");
   }
@@ -466,6 +498,13 @@ function App() {
     const response = await fetch(API.status);
     if (response.ok) {
       setStatus(await response.json());
+    }
+  }
+
+  async function refreshAudioDebug() {
+    const response = await fetch(API.audioDebug);
+    if (response.ok) {
+      setAudioDebug(await response.json());
     }
   }
 
@@ -632,6 +671,11 @@ function App() {
     }
     const nextConfig = ensureShape(await response.json());
     setConfig(nextConfig);
+    setAudioDebug((current) => ({
+      ...current,
+      enabled: nextConfig.audio_debug_enabled,
+      keep_sessions: nextConfig.audio_debug_keep_sessions,
+    }));
     setMessage({ text: "Saved", tone: "ok" });
   }
 
@@ -660,6 +704,17 @@ function App() {
     setConfig(ensureShape(await response.json()));
     await refreshStatus();
     setMessage({ text: "MCP reset to Supervisor defaults", tone: "ok" });
+  }
+
+  async function clearAudioDebug() {
+    setMessage({ text: "Clearing audio captures", tone: "" });
+    const response = await fetch(API.audioDebug, { method: "DELETE" });
+    if (!response.ok) {
+      setMessage({ text: await response.text(), tone: "error" });
+      return;
+    }
+    setAudioDebug(await response.json());
+    setMessage({ text: "Audio captures cleared", tone: "ok" });
   }
 
   async function copyOfferUrl() {
@@ -786,6 +841,9 @@ function App() {
             checkMcp={checkMcp}
             resetMcpDefaults={resetMcpDefaults}
             copyOfferUrl={copyOfferUrl}
+            audioDebug={audioDebug}
+            refreshAudioDebug={refreshAudioDebug}
+            clearAudioDebug={clearAudioDebug}
             updateConfig={updateConfig}
             updateIntegration={updateIntegration}
           />
@@ -1542,7 +1600,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
               about: {
                 library: "pipecat-assist-ui",
-                library_version: "0.1.15",
+                library_version: "0.1.16",
                 platform: "browser",
               },
             },
@@ -1649,6 +1707,92 @@ function VoiceTest({ config, flow }) {
   );
 }
 
+function AudioDebugPanel({
+  config,
+  audioDebug,
+  refreshAudioDebug,
+  clearAudioDebug,
+  updateConfig,
+}) {
+  const recordings = audioDebug?.recordings || [];
+
+  return (
+    <>
+      <div className="panel-head">
+        <div>
+          <h3>Audio debug</h3>
+          <span>{audioDebug?.enabled ? "enabled" : `${recordings.length} sessions`}</span>
+        </div>
+        <div className="button-row">
+          <Button icon={RefreshCw} variant="secondary" onClick={refreshAudioDebug}>
+            Refresh
+          </Button>
+          <Button icon={Trash2} variant="danger" onClick={clearAudioDebug} disabled={!recordings.length}>
+            Clear
+          </Button>
+        </div>
+      </div>
+      <div className="form-grid">
+        <Toggle
+          checked={config.audio_debug_enabled}
+          onChange={(value) => updateConfig((draft) => ({ ...draft, audio_debug_enabled: value }))}
+          label="Record audio in/out"
+        />
+        <Field label="Keep sessions">
+          <input
+            type="number"
+            min="1"
+            max="100"
+            value={config.audio_debug_keep_sessions || 10}
+            onChange={(event) =>
+              updateConfig((draft) => ({
+                ...draft,
+                audio_debug_keep_sessions: Math.min(100, Math.max(1, Number(event.target.value || 1))),
+              }))
+            }
+          />
+        </Field>
+      </div>
+      <div className="recording-list">
+        {recordings.length ? (
+          recordings.map((recording) => (
+            <div className="recording-row" key={recording.id}>
+              <div className="recording-meta">
+                <strong>{formatTimestamp(recording.started_at)}</strong>
+                <span>
+                  {[recording.flow_name || recording.flow_id, recording.provider, recording.model]
+                    .filter(Boolean)
+                    .join(" / ")}
+                </span>
+              </div>
+              <div className="recording-actions">
+                <AudioDebugDownload file={recording.input} label="Input" />
+                <AudioDebugDownload file={recording.output} label="Output" />
+              </div>
+            </div>
+          ))
+        ) : (
+          <div className="empty-state">No audio captures</div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function AudioDebugDownload({ file, label }) {
+  if (!file) {
+    return <span className="recording-empty">{label}: pending</span>;
+  }
+  return (
+    <a className="button secondary" href={appUrl(file.url)} download={file.filename}>
+      <Download size={16} strokeWidth={2} />
+      <span>
+        {label} ({formatBytes(file.size)})
+      </span>
+    </a>
+  );
+}
+
 function RuntimeView({
   config,
   flow,
@@ -1656,6 +1800,9 @@ function RuntimeView({
   checkMcp,
   resetMcpDefaults,
   copyOfferUrl,
+  audioDebug,
+  refreshAudioDebug,
+  clearAudioDebug,
   updateConfig,
   updateIntegration,
 }) {
@@ -1707,6 +1854,14 @@ function RuntimeView({
           </div>
         </div>
         <VoiceTest config={config} flow={flow} />
+        <div className="divider" />
+        <AudioDebugPanel
+          config={config}
+          audioDebug={audioDebug}
+          refreshAudioDebug={refreshAudioDebug}
+          clearAudioDebug={clearAudioDebug}
+          updateConfig={updateConfig}
+        />
       </section>
 
       <section className="panel inspector">

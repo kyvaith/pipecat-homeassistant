@@ -74,6 +74,14 @@ Home Assistant MCP access uses the add-on's Supervisor token by default. Use
 return to the Supervisor-backed defaults. Manually pasted long-lived access
 tokens are only needed for custom installations outside the Supervisor path.
 
+## Audio debugging
+
+Open **Runtime > Audio debug**, enable **Record audio in/out**, save, and then
+run the browser voice test or connect a satellite. The add-on writes separate
+WAV files for microphone input and assistant output under `/data/audio-debug`
+and exposes download links in the Runtime panel. Use **Clear** after debugging,
+because these files may contain private household audio.
+
 ## Pipecat ESP32
 
 Pipecat ESP32 expects a SmallWebRTC offer endpoint:

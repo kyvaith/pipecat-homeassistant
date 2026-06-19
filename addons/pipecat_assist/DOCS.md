@@ -30,8 +30,9 @@ Home Assistant MCP.
 
 `Runtime`
 : Check or reset Home Assistant MCP, configure the satellite public host and
-shared satellite secret, and run a browser voice test that connects to the
-selected pipeline through the same SmallWebRTC offer route used by satellites.
+shared satellite secret, run a browser voice test, and enable audio debug
+captures for the selected pipeline through the same SmallWebRTC offer route
+used by satellites.
 
 ### Home Assistant MCP
 
@@ -43,6 +44,13 @@ Select **Reset MCP** to clear a custom MCP URL or saved access token and return
 to the Supervisor-backed defaults. The manual access-token field is only for
 custom deployments where the Supervisor token is not available or a custom MCP
 URL is used.
+
+### Audio debug captures
+
+Open **Runtime > Audio debug**, enable **Record audio in/out**, save, and run a
+voice test or satellite session. The add-on stores separate input and output
+WAV files under `/data/audio-debug` and shows download links in the Runtime
+panel. Clear the captures after troubleshooting if they include private audio.
 
 ## Gemini Live
 

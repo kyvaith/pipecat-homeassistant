@@ -290,7 +290,7 @@ class FlowConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 6
+    version: int = 7
     openai_api_key: str = ""
     text_model: str = DEFAULT_GEMINI_TEXT_MODEL
     ha_mcp_url: str = ""
@@ -300,6 +300,8 @@ class RuntimeConfig(BaseModel):
     runner_port: int = Field(default=7860, ge=1024, le=65535)
     esp32_mode: bool = False
     enable_default_ice_servers: bool = False
+    audio_debug_enabled: bool = False
+    audio_debug_keep_sessions: int = Field(default=10, ge=1, le=100)
     selected_flow_id: str = "home-default"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     integrations: list[IntegrationConfig] = Field(default_factory=default_integrations)
@@ -441,6 +443,8 @@ def default_config_from_environment() -> RuntimeConfig:
         runner_host=os.getenv("RUNNER_HOST", ""),
         runner_port=_env_int("RUNNER_PORT", 7860),
         esp32_mode=_env_bool("ESP32_MODE", False),
+        audio_debug_enabled=_env_bool("AUDIO_DEBUG_ENABLED", False),
+        audio_debug_keep_sessions=min(100, max(1, _env_int("AUDIO_DEBUG_KEEP_SESSIONS", 10))),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         flows=[flow],
     )
@@ -700,6 +704,10 @@ class ConfigStore:
             for flow in config.flows:
                 changed = _repair_flow_provider_model(config, flow) or changed
             changed = _repair_mcp_url_overrides(config) or changed
+            changed = True
+
+        if config.version < 7:
+            config.version = 7
             changed = True
 
         for flow in config.flows:
