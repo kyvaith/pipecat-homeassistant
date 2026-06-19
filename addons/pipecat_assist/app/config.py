@@ -346,70 +346,37 @@ def default_steps() -> list[PipelineStepConfig]:
 
 
 def default_conversation_flow() -> dict[str, Any]:
-    """Return a starter Pipecat Flows graph for composed realtime pipelines."""
+    """Return a transparent Pipecat Flows graph for composed realtime pipelines."""
 
     return {
         "enabled": False,
-        "initial_node_id": "home_router",
+        "initial_node_id": "passthrough",
         "nodes": [
             {
-                "id": "home_router",
-                "label": "Home router",
+                "id": "passthrough",
+                "label": "Pass-through",
                 "role_message": DEFAULT_INSTRUCTIONS,
-                "task": (
-                    "Answer normal smart-home requests. If the user wants to order pizza, "
-                    "call start_pizza_order."
-                ),
-                "functions": [
-                    {
-                        "name": "start_pizza_order",
-                        "description": "Start a guided pizza ordering conversation.",
-                        "properties": {},
-                        "required": [],
-                        "next_node_id": "pizza_order",
-                    }
-                ],
-            },
-            {
-                "id": "pizza_order",
-                "label": "Pizza order",
-                "role_message": (
-                    "You collect pizza order details. Ask only for missing information. "
-                    "Confirm before placing the order."
-                ),
-                "task": "Collect size, toppings, delivery details, and confirmation.",
-                "functions": [
-                    {
-                        "name": "place_pizza_order",
-                        "description": (
-                            "Place the pizza order through a Home Assistant MCP tool after "
-                            "the user has confirmed all details."
-                        ),
-                        "properties": {
-                            "size": {"type": "string", "description": "Pizza size"},
-                            "toppings": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Requested toppings",
-                            },
-                            "address": {"type": "string", "description": "Delivery address"},
-                            "notes": {"type": "string", "description": "Optional order notes"},
-                        },
-                        "required": ["size", "toppings"],
-                        "mcp_tool": "",
-                        "next_node_id": "done",
-                    }
-                ],
-            },
-            {
-                "id": "done",
-                "label": "Done",
-                "role_message": DEFAULT_INSTRUCTIONS,
-                "task": "Briefly confirm the result and end the conversation.",
-                "post_actions": [{"type": "end_conversation"}],
+                "task": "Continue the conversation normally without changing the pipeline behavior.",
+                "functions": [],
+                "respond_immediately": False,
             },
         ],
     }
+
+
+def _looks_like_old_pizza_example(flow: dict[str, Any]) -> bool:
+    """Return true for the previous built-in pizza example."""
+
+    nodes = flow.get("nodes") or []
+    node_ids = {str(node.get("id", "")) for node in nodes}
+    if node_ids != {"home_router", "pizza_order", "done"}:
+        return False
+    functions = [
+        str(fn.get("name", ""))
+        for node in nodes
+        for fn in node.get("functions", []) or []
+    ]
+    return "start_pizza_order" in functions and "place_pizza_order" in functions
 
 
 class FlowConfig(BaseModel):
@@ -467,7 +434,7 @@ class FlowConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 8
+    version: int = 9
     openai_api_key: str = ""
     text_model: str = DEFAULT_GEMINI_TEXT_MODEL
     ha_mcp_url: str = ""
@@ -962,6 +929,14 @@ class ConfigStore:
                     )
             changed = True
 
+        if config.version < 9:
+            config.version = 9
+            for flow in config.flows:
+                if _looks_like_old_pizza_example(flow.conversation_flow):
+                    flow.conversation_flow = default_conversation_flow()
+                    changed = True
+            changed = True
+
         for flow in config.flows:
             changed = _repair_flow_provider_model(config, flow) or changed
         changed = _repair_mcp_url_overrides(config) or changed
@@ -1001,6 +976,40 @@ class ConfigStore:
         integration.base_url = ""
         integration.token = ""
 
+        self.save(config)
+        return config
+
+    def reset_integration_defaults(self, integration_id: str) -> RuntimeConfig:
+        """Reset one integration to the add-on defaults."""
+
+        config = self.load()
+        current = config.integration(integration_id)
+        if not current:
+            raise KeyError(integration_id)
+
+        defaults = default_config_from_environment().integrations
+        replacement = next(
+            (
+                item
+                for item in defaults
+                if item.id == current.id or item.kind == current.kind
+            ),
+            None,
+        )
+        if replacement:
+            next_item = replacement.model_copy(deep=True)
+            next_item.id = current.id
+            next_item.name = current.name
+        else:
+            next_item = IntegrationConfig(
+                id=current.id,
+                name=current.name,
+                kind=current.kind,
+            )
+
+        config.integrations = [
+            next_item if item.id == integration_id else item for item in config.integrations
+        ]
         self.save(config)
         return config
 

@@ -14,7 +14,7 @@ There are two useful test paths:
 
 ## Requirements
 
-- Pipecat Assist 0.1.17 or newer.
+- Pipecat Assist 0.1.18 or newer.
 - Home Assistant with the Model Context Protocol Server integration enabled.
 - A Google AI Studio API key with access to the Gemini Live API.
 - The `custom_components/pipecat_assist` integration installed if you want to
@@ -26,31 +26,32 @@ the add-on image includes `pipecat-ai[google]`.
 
 ## Configure The Add-On
 
-1. Update Pipecat Assist to version 0.1.17 or newer.
+1. Update Pipecat Assist to version 0.1.18 or newer.
 2. Start the add-on and open the Pipecat Assist web UI.
 3. In Home Assistant, enable **Model Context Protocol Server**.
-4. Open **Runtime > Home Assistant**:
-   - `MCP URL`: keep `http://supervisor/core/api/mcp` unless your installation
-     needs a custom URL.
-   - Click **Check MCP**. A healthy result shows the number of tools. In a
+4. Open **Integrations > Home Assistant MCP**:
+   - Keep the status on **Automatic** unless your installation needs a custom
+     MCP URL or token.
+   - Click **Test MCP**. A healthy result shows the number of tools. In a
      normal add-on install this uses the Home Assistant Supervisor token
      automatically.
-   - Click **Reset MCP** if you previously saved a custom MCP URL or token and
-     want to return to the Supervisor-backed defaults.
+   - Click **Automatic defaults** if you previously saved a custom MCP URL or
+     token and want to return to the Supervisor-backed defaults.
 5. Open **Integrations > Google Gemini**:
    - `API key`: paste the key from Google AI Studio.
    - `Default model`: use `gemini-3.5-flash` for Home Assistant Assist text
      tests.
    - `Realtime model`: use `models/gemini-3.1-flash-live-preview`.
    - `Voice`: use `Charon` or another Gemini Live voice, for example `Puck`.
-6. Open **Pipelines** and select the **Gemini Live** template. New
-   installations use it by default.
+6. Open **Pipelines**, open the active **Gemini Live Home Assistant** pipeline,
+   or add the **Gemini Live** starter. New installations use it by default.
 7. Set:
    - `Language`: `en-US` for English, or another BCP-47 code such as `pl-PL`.
-   - `MCP tools`: enabled.
    - `Instructions`: keep the default Home Assistant voice agent instruction or
      adjust it for your household rules.
-8. Click **Save**.
+   - Leave **No greeting** off if you want the assistant to greet first; turn it
+     on if it should only speak after the user starts.
+8. Click **Save pipeline**.
 
 ## Test Realtime Voice In The Add-On UI
 
@@ -99,17 +100,15 @@ tool calls. It is a text-path test, not a streaming Gemini Live audio test.
 
 ## Test With Pipecat ESP32
 
-1. In Pipecat Assist, open **Runtime > Satellite**.
-2. Set `Public host` to the Home Assistant LAN address, for example
-   `192.168.1.20`.
-3. Copy `Offer URL`.
-4. Configure Pipecat ESP32 or another SmallWebRTC client:
+1. Enable `esp32_mode` in the Home Assistant add-on options if the ESP32 client
+   needs Pipecat's ESP32 SDP handling.
+2. Configure Pipecat ESP32 or another SmallWebRTC client:
 
 ```bash
 export PIPECAT_SMALLWEBRTC_URL="http://<ha-lan-ip>:7860/api/offer?token=<satellite-secret>"
 ```
 
-5. Start the satellite and say:
+3. Start the satellite and say:
    - `Turn on the living room lamp.`
    - `Is the garage door open?`
 
@@ -121,16 +120,16 @@ with voice.
 - `Missing module: google.genai`: the add-on image is older than 0.1.3.
 - `model not found`: check Live API access in Google AI Studio. You can also
   test `models/gemini-2.5-flash-native-audio-preview-12-2025`.
-- MCP or `401`: select **Reset MCP**, restart the add-on, and then select
-  **Check MCP** again so it can use the Supervisor token. Use a Home Assistant
-  long-lived access token only for custom MCP URLs or non-Supervisor
-  deployments.
+- MCP or `401`: open **Integrations > Home Assistant MCP**, select
+  **Automatic defaults**, restart the add-on, and then select **Test MCP** so it
+  can use the Supervisor token. Use a Home Assistant long-lived access token
+  only for custom MCP URLs or non-Supervisor deployments.
 - HA Assist does not respond: make sure the custom integration points to
   `http://127.0.0.1:7860` or to the correct Home Assistant LAN URL.
 - The browser voice test has no microphone: use HTTPS or a browser trusted
   local origin.
 - The assistant answers a different question than the one you asked: open
-  **Runtime > Audio debug**, enable **Record audio in/out**, save, repeat the
+  **Runtime**, enable **Record audio in/out**, save, repeat the
   voice test, and download the input/output WAV files from the Runtime panel.
 - Voice `marin` does not work with Gemini: set the Gemini integration voice to
   `Charon` or `Puck`.

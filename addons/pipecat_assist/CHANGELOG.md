@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.18
+
+- Reworked the add-on UI into a product-style flow with Assistant-first
+  validation, a pipeline list before pipeline editing, contextual step
+  inspectors, and a nested Pipecat Flow composer.
+- Moved Home Assistant MCP testing and reset controls into the Home Assistant
+  MCP integration, with Automatic, Manual, and Error status labels.
+- Added per-integration reset-to-default actions, removed technical ID/kind
+  fields from integration forms, and moved save buttons under the edited
+  settings.
+- Removed duplicated MCP, voice test, and satellite-secret controls from
+  Runtime. Runtime now focuses on audio debug and add-on-managed facts.
+- Added dark mode, step/pipeline color coding, pipeline validation, drag/drop
+  step insertion, hover/click button motion, optional no-greeting behavior, and
+  a Voice UI Kit-inspired assistant test surface.
+
 ## 0.1.17
 
 - Added composed realtime Pipecat runtime support for STT -> LLM -> TTS

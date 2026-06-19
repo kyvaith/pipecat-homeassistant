@@ -2,7 +2,7 @@
 set -e
 
 RUNNER_HOST="0.0.0.0"
-RUNNER_PORT="7860"
+RUNNER_PORT="$(bashio::config 'runner_port')"
 ESP32_MODE="$(bashio::config 'esp32_mode')"
 LOG_LEVEL="$(bashio::config 'log_level')"
 

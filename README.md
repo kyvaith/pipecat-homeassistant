@@ -57,7 +57,7 @@ flowchart LR
 2. Install **Pipecat Assist**.
 3. Enable Home Assistant's **Model Context Protocol Server** integration.
 4. Start the add-on and open the web UI.
-5. Open **Runtime > Home Assistant** and click **Check MCP**. In a normal
+5. Open **Integrations > Home Assistant MCP** and click **Test MCP**. In a normal
    Home Assistant add-on install, Pipecat Assist uses the Supervisor token
    automatically.
 6. Configure model providers:
@@ -76,9 +76,10 @@ For a complete Google Gemini Live setup and Home Assistant Assist test path,
 see [Gemini Live in Home Assistant](docs/gemini-live-home-assistant.md).
 
 Home Assistant MCP access uses the add-on's Supervisor token by default. Use
-**Runtime > Home Assistant > Reset MCP** to clear custom MCP overrides and
-return to the Supervisor-backed defaults. Manually pasted long-lived access
-tokens are only needed for custom installations outside the Supervisor path.
+**Integrations > Home Assistant MCP > Automatic defaults** to clear custom MCP
+overrides and return to the Supervisor-backed defaults. Manually pasted
+long-lived access tokens are only needed for custom installations outside the
+Supervisor path.
 
 ## Pipelines and Pipecat Flows
 
@@ -93,13 +94,13 @@ Pipecat Assist supports two realtime runtime families:
 
 Official `pipecat-ai-flows` support is enabled for composed realtime pipelines.
 The flow editor stores nodes, transition functions, JSON schemas, and optional
-Home Assistant MCP tool calls. For speech-to-speech services, the UI keeps the
-flow tile as a conversation-router placeholder because Pipecat Flows does not
-currently support Gemini Live or OpenAI Realtime S2S APIs.
+Home Assistant MCP tool calls. For speech-to-speech services, the UI disables
+the Pipecat Flow tile because Pipecat Flows does not currently support Gemini
+Live or OpenAI Realtime S2S APIs.
 
 ## Audio debugging
 
-Open **Runtime > Audio debug**, enable **Record audio in/out**, save, and then
+Open **Runtime**, enable **Record audio in/out**, save, and then
 run the browser voice test or connect a satellite. The add-on writes separate
 WAV files for microphone input and assistant output under `/data/audio-debug`
 and exposes download links in the Runtime panel. Use **Clear** after debugging,
@@ -115,7 +116,8 @@ export PIPECAT_SMALLWEBRTC_URL="http://<home-assistant-lan-ip>:7860/api/offer?to
 
 This repository intentionally keeps the ESP32 firmware separate for now. The
 next step is to integrate Pipecat ESP32 into ESPHome so the device side and the
-Home Assistant add-on become one ecosystem.
+Home Assistant add-on become one ecosystem. The direct ESP32 authentication
+path will move toward the standard Home Assistant token flow during that work.
 
 ## Development
 

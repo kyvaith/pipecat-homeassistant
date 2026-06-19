@@ -280,6 +280,18 @@ async def api_reset_mcp(request: Request):
     return data
 
 
+@app.post("/api/assist/integrations/{integration_id}/reset")
+async def api_reset_integration(integration_id: str, request: Request):
+    try:
+        config = STORE.reset_integration_defaults(integration_id)
+    except KeyError as err:
+        raise HTTPException(status_code=404, detail="Integration not found") from err
+    data = config.public_dict()
+    data["runner_offer_url"] = _offer_url(config, request)
+    data["runner_offer_path"] = _offer_path(config)
+    return data
+
+
 @app.post("/api/assist/conversation")
 async def api_conversation(payload: dict[str, Any]):
     text = str(payload.get("text", "")).strip()
@@ -1006,10 +1018,16 @@ async def run_bot(
         if bridge and tools_schema:
             await bridge.register_tools_schema(tools_schema, llm)
 
-        if tools_schema:
-            context = LLMContext([{"role": "developer", "content": flow.greeting}], tools_schema)
-        else:
-            context = LLMContext([{"role": "developer", "content": flow.greeting}])
+        greeting_messages = (
+            [{"role": "developer", "content": flow.greeting}]
+            if flow.greeting.strip()
+            else []
+        )
+        context = (
+            LLMContext(greeting_messages, tools_schema)
+            if tools_schema
+            else LLMContext(greeting_messages)
+        )
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
             context,
             realtime_service_mode=True,
@@ -1045,7 +1063,8 @@ async def run_bot(
             logger.info("Client connected to flow {}", flow.id)
             if _flow_enabled(flow):
                 logger.warning("Pipecat Flows are ignored for speech-to-speech runtime {}", provider_kind)
-            await worker.queue_frames([LLMRunFrame()])
+            if flow.greeting.strip():
+                await worker.queue_frames([LLMRunFrame()])
 
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):
@@ -1078,10 +1097,9 @@ async def run_bot(
 
         initial_flow_node = None
         active_tools_schema = None if _flow_enabled(flow) else tools_schema
-        context_messages = [
-            {"role": "developer", "content": flow.instructions},
-            {"role": "developer", "content": flow.greeting},
-        ]
+        context_messages = [{"role": "developer", "content": flow.instructions}]
+        if flow.greeting.strip():
+            context_messages.append({"role": "developer", "content": flow.greeting})
         context = LLMContext(context_messages, active_tools_schema) if active_tools_schema else LLMContext(context_messages)
         context_aggregator = LLMContextAggregatorPair(
             context,
@@ -1138,7 +1156,7 @@ async def run_bot(
             logger.info("Client connected to composed flow {}", flow.id)
             if flow_manager and initial_flow_node:
                 await flow_manager.initialize(initial_flow_node)
-            else:
+            elif flow.greeting.strip():
                 await worker.queue_frames([LLMRunFrame()])
 
         @transport.event_handler("on_client_disconnected")

@@ -2,6 +2,9 @@ configuration:
   esp32_mode:
     name: ESP32 mode
     description: Enables Pipecat SDP adjustments at process startup for ESP32 SmallWebRTC clients.
+  runner_port:
+    name: Runner port
+    description: TCP port used by the Pipecat web and SmallWebRTC runner.
   log_level:
     name: Log level
     description: Application log level.
