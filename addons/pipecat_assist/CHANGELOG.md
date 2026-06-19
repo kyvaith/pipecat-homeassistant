@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.11
+
+- Fixed Home Assistant OAuth token exchange by using the normal Home Assistant
+  `/auth/token` endpoint instead of the Supervisor proxy endpoint.
+- Added fallback handling for Supervisor `401/403` token endpoint responses.
+
 ## 0.1.10
 
 - Changed Home Assistant OAuth to redirect back to the stable add-on panel URL

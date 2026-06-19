@@ -26,8 +26,7 @@ class OAuthState:
 
 
 def _default_token_url(mcp_url: str, ha_url: str) -> str:
-    if mcp_url.startswith("http://supervisor/core/"):
-        return "http://supervisor/core/auth/token"
+    del mcp_url
     return urljoin(ha_url.rstrip("/") + "/", "auth/token")
 
 
@@ -85,7 +84,7 @@ async def exchange_code(store: ConfigStore, *, code: str, state: str) -> None:
         used_token_url = oauth_state.token_url
         response = await _post_token(client, oauth_state.token_url, form)
         if (
-            response.status_code in {404, 405, 502, 503}
+            response.status_code in {401, 403, 404, 405, 502, 503}
             and oauth_state.fallback_token_url
             and oauth_state.fallback_token_url != oauth_state.token_url
         ):
