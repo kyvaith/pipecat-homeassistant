@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="addons/pipecat_assist/logo.png" alt="Pipecat Assist" width="420">
+  <img src="https://raw.githubusercontent.com/kyvaith/pipecat-homeassistant/main/addons/pipecat_assist/logo.png" alt="Pipecat Assist" width="420">
 </p>
 
 # Pipecat Home Assistant
@@ -22,20 +22,6 @@ Assistant MCP server.
   conversation entry points can select "Pipecat Realtime".
 - `.github/workflows` - CI and GHCR publishing workflows for multi-arch Home
   Assistant images.
-
-## Branding in Home Assistant
-
-The repository ships Pipecat branding assets in the places Home Assistant reads:
-
-- `addons/pipecat_assist/icon.png` and `addons/pipecat_assist/logo.png` for the
-  Supervisor app/add-on listing.
-- `custom_components/pipecat_assist/brand/icon.png` and
-  `custom_components/pipecat_assist/brand/logo.png` for the custom integration
-  dialog on Home Assistant 2026.3 and newer.
-- `addons/pipecat_assist/app/ui/logo.svg` for the add-on Ingress UI.
-
-The Ingress sidebar entry still uses `panel_icon: mdi:account-voice`, because
-Home Assistant panel icons are configured as MDI icons.
 
 ## Architecture
 
@@ -150,9 +136,6 @@ docker build -t pipecat-assist:dev addons/pipecat_assist
 - Pipecat: https://github.com/pipecat-ai/pipecat
 - Pipecat Flows: https://github.com/pipecat-ai/pipecat-flows
 - Pipecat Flows Editor: https://github.com/pipecat-ai/pipecat-flows-editor
-- Pipecat logo source: https://github.com/pipecat-ai/voice-ui-kit/blob/main/package/src/components/elements/PipecatLogo.tsx
 - Pipecat ESP32: https://github.com/pipecat-ai/pipecat-esp32
 - Home Assistant MCP server: https://www.home-assistant.io/integrations/mcp_server/
 - Home Assistant app docs: https://developers.home-assistant.io/docs/apps/configuration/
-- Home Assistant app presentation assets: https://developers.home-assistant.io/docs/apps/presentation/
-- Home Assistant local integration brand assets: https://developers.home-assistant.io/blog/2026/02/24/brands-proxy-api/

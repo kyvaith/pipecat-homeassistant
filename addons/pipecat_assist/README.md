@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="Pipecat Assist" width="320">
+  <img src="https://raw.githubusercontent.com/kyvaith/pipecat-homeassistant/main/addons/pipecat_assist/logo.png" alt="Pipecat Assist" width="320">
 </p>
 
 # Pipecat Assist
@@ -19,6 +19,3 @@ ElevenLabs`. Official Pipecat Flows can be enabled inside composed realtime
 pipelines.
 
 For setup, testing, and troubleshooting, see `DOCS.md`.
-
-Home Assistant displays this add-on with `icon.png` and `logo.png` from this
-directory. The Ingress UI uses the same Pipecat mark in `/assets/logo.svg`.
