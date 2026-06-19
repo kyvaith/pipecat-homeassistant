@@ -1234,6 +1234,7 @@ html[data-theme="dark"] .status-pill.error {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
   height: 38px;
   min-height: 38px;
   gap: 7px;
@@ -1246,6 +1247,16 @@ html[data-theme="dark"] .status-pill.error {
   font-weight: 800;
   line-height: 1;
   white-space: nowrap;
+}
+
+.active-badge svg,
+.active-badge span {
+  display: block;
+  flex: 0 0 auto;
+  margin: 0;
+  color: inherit;
+  font-size: inherit;
+  line-height: 1;
 }
 
 .pipeline-editor-grid {

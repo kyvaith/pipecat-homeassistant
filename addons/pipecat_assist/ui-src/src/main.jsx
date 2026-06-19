@@ -138,6 +138,17 @@ const stepProviders = {
   output: ["gemini", "openai", "aws_nova_sonic"],
 };
 
+function allowedProvidersForStep(kind, mode) {
+  if (kind === "llm" && mode === "realtime") return ["gemini", "openai", "aws_nova_sonic"];
+  if (kind === "output" && mode === "composed") return [];
+  return stepProviders[kind] || null;
+}
+
+function canUseIntegrationForStep(kind, integration, mode) {
+  const allowed = allowedProvidersForStep(kind, mode);
+  return !allowed || allowed.includes(integration.kind);
+}
+
 const templates = [
   {
     id: "gemini_live_home",
@@ -211,7 +222,7 @@ const templates = [
     icon: Workflow,
     group: "Composed realtime",
     mode: "composed",
-    provider: "openai",
+    provider: "openai-cloud",
     accent: "mint",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
@@ -1880,7 +1891,7 @@ function validatePipeline(config, flow) {
     if (!integration.enabled) {
       errors.push(`${integration.name} is disabled.`);
     }
-    const allowed = stepProviders[step.kind];
+    const allowed = allowedProvidersForStep(step.kind, derivedMode);
     if (allowed && !allowed.includes(integration.kind)) {
       errors.push(`${integration.name} cannot be used as ${step.kind.toUpperCase()}.`);
     }
@@ -2309,7 +2320,7 @@ function PipelineView({
             {flow.id === activeFlowId ? (
               <span className="active-badge">
                 <CheckCircle2 size={15} />
-                Active
+                <span>Active</span>
               </span>
             ) : (
               <Button icon={CheckCircle2} variant="secondary" onClick={() => activateFlow(flow.id)} disabled={saving}>
@@ -2427,10 +2438,7 @@ function PipelineView({
                   >
                     <option value="">None</option>
                     {config.integrations
-                      .filter((integration) => {
-                        const allowed = stepProviders[selectedStep.kind];
-                        return !allowed || allowed.includes(integration.kind);
-                      })
+                      .filter((integration) => canUseIntegrationForStep(selectedStep.kind, integration, derivedMode))
                       .map((integration) => (
                         <option key={integration.id} value={integration.id}>
                           {integration.name}
@@ -4103,7 +4111,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
               about: {
                 library: "pipecat-assist-ui",
-                library_version: "0.1.21",
+                library_version: "0.1.23",
                 platform: "browser",
               },
             },

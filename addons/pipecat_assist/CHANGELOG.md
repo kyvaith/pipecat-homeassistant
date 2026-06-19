@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.23
+
+- Fixed pipeline validation and integration dropdowns so OpenAI Realtime is
+  valid for speech-to-speech pipelines and OpenAI Cloud is used for composed
+  STT, LLM, TTS, and Pipecat Flow pipelines.
+- Migrated existing saved "OpenAI" integrations to the "OpenAI Realtime" name
+  and kept the separate OpenAI Cloud profile for non-realtime model settings.
+- Fixed the active pipeline badge alignment in the pipeline editor.
+
 ## 0.1.22
 
 - Split OpenAI configuration into OpenAI Realtime for speech-to-speech

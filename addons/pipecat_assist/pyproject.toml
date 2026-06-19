@@ -1,6 +1,6 @@
 [project]
 name = "pipecat-assist"
-version = "0.1.22"
+version = "0.1.23"
 description = "Home Assistant add-on for Pipecat realtime assistants"
 requires-python = ">=3.11,<3.14"
 dependencies = [

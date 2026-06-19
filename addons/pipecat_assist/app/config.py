@@ -812,6 +812,9 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
 
     openai = config.integration("openai")
     if openai:
+        if openai.name in {"OpenAI", "OpenAI Realitme"}:
+            openai.name = "OpenAI Realtime"
+            changed = True
         if openai.default_model:
             openai.default_model = ""
             changed = True
@@ -827,6 +830,9 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
 
     openai_cloud = config.integration("openai-cloud")
     if openai_cloud:
+        if openai_cloud.name != "OpenAI Cloud":
+            openai_cloud.name = "OpenAI Cloud"
+            changed = True
         if openai and openai.api_key and not openai_cloud.api_key:
             openai_cloud.api_key = openai.api_key
             openai_cloud.enabled = openai.enabled
