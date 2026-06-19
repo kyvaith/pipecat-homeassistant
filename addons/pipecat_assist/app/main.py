@@ -626,6 +626,28 @@ def _gemini_vad(flow: FlowConfig):
     return GeminiVADParams(silence_duration_ms=silence_duration_ms)
 
 
+def _composed_vad_analyzer(flow: FlowConfig):
+    """Return local VAD tuned for browser and ESP32 composed pipelines."""
+
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.audio.vad.vad_analyzer import VADParams
+
+    stop_secs_by_eagerness = {
+        "high": 0.25,
+        "medium": 0.45,
+        "auto": 0.45,
+        "low": 0.7,
+    }
+    return SileroVADAnalyzer(
+        params=VADParams(
+            confidence=0.5,
+            start_secs=0.05,
+            stop_secs=stop_secs_by_eagerness.get(flow.vad_eagerness, 0.45),
+            min_volume=0.05,
+        )
+    )
+
+
 def _gemini_live_service(
     *,
     api_key: str,
@@ -1156,8 +1178,10 @@ async def run_bot(
             await worker.cancel()
 
     else:
-        from pipecat.audio.vad.silero import SileroVADAnalyzer
         from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
+        from pipecat.processors.audio.vad_processor import VADProcessor
+        from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+        from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
         stt = _build_stt_service(config, flow)
         llm = _build_llm_service(config, flow, tools_schema=tools_schema)
@@ -1186,12 +1210,15 @@ async def run_bot(
             context_messages.append({"role": "developer", "content": flow.greeting})
         context = LLMContext(context_messages, active_tools_schema) if active_tools_schema else LLMContext(context_messages)
         vad_step = _enabled_step(flow, "vad")
+        vad_processor = VADProcessor(vad_analyzer=_composed_vad_analyzer(flow)) if vad_step else None
         if vad_step:
             context_aggregator = LLMContextAggregatorPair(
                 context,
                 user_params=LLMUserAggregatorParams(
-                    vad_analyzer=SileroVADAnalyzer(),
-                    filter_incomplete_user_turns=True,
+                    user_turn_strategies=UserTurnStrategies(
+                        stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.7)]
+                    ),
+                    user_turn_stop_timeout=2.0,
                 ),
             )
         else:
@@ -1215,6 +1242,8 @@ async def run_bot(
                 logger.warning("Audio debug recorder could not start: {}", err)
 
         processors = [transport.input()]
+        if vad_processor:
+            processors.append(vad_processor)
         if audio_debug:
             processors.append(audio_debug.input_recorder)
         processors.extend([stt, context_aggregator.user(), llm, tts])

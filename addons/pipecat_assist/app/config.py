@@ -450,7 +450,7 @@ class FlowConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 12
+    version: int = 13
     openai_api_key: str = ""
     text_model: str = DEFAULT_GEMINI_TEXT_MODEL
     ha_mcp_url: str = ""
@@ -813,6 +813,37 @@ def _strip_unsupported_s2s_flow_steps(config: RuntimeConfig, flow: FlowConfig) -
     return changed
 
 
+def _ensure_composed_vad_step(flow: FlowConfig) -> bool:
+    """Add local turn detection to composed realtime flows created before 0.1.25."""
+
+    if not _is_composed_flow(flow):
+        return False
+    if any(step.kind == "vad" for step in flow.steps):
+        return False
+
+    existing_ids = {step.id for step in flow.steps}
+    step_id = "vad"
+    suffix = 2
+    while step_id in existing_ids:
+        step_id = f"vad-{suffix}"
+        suffix += 1
+
+    insert_at = next(
+        (index + 1 for index, step in enumerate(flow.steps) if step.kind == "transport"),
+        1,
+    )
+    flow.steps.insert(
+        min(insert_at, len(flow.steps)),
+        PipelineStepConfig(
+            id=step_id,
+            kind="vad",
+            label="Turn detection",
+            settings={"mode": "local_vad", "eagerness": flow.vad_eagerness or "medium"},
+        ),
+    )
+    return True
+
+
 def _repair_mcp_url_overrides(config: RuntimeConfig) -> bool:
     """Clear custom MCP URLs that httpx cannot use."""
 
@@ -1105,6 +1136,12 @@ class ConfigStore:
             config.version = 12
             for flow in config.flows:
                 changed = _repair_composed_gemini_integrations(config, flow) or changed
+            changed = True
+
+        if config.version < 13:
+            config.version = 13
+            for flow in config.flows:
+                changed = _ensure_composed_vad_step(flow) or changed
             changed = True
 
         for flow in config.flows:

@@ -209,6 +209,7 @@ const templates = [
     accent: "mint",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Soniox STT", "soniox"],
       ["llm", "llm", "OpenAI LLM", "openai-cloud"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
@@ -227,6 +228,7 @@ const templates = [
     accent: "mint",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Soniox STT", "soniox"],
       ["llm", "llm", "OpenAI LLM", "openai-cloud"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
@@ -245,6 +247,7 @@ const templates = [
     accent: "blue",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Deepgram STT", "deepgram"],
       ["llm", "llm", "Gemini Cloud LLM", "gemini-cloud"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
@@ -263,6 +266,7 @@ const templates = [
     accent: "blue",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Deepgram STT", "deepgram"],
       ["llm", "llm", "Gemini Cloud LLM", "gemini-cloud"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
@@ -281,6 +285,7 @@ const templates = [
     accent: "rose",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Speechmatics STT", "speechmatics"],
       ["llm", "llm", "AWS Nova Pro", "bedrock"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
@@ -299,6 +304,7 @@ const templates = [
     accent: "blue",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Cloud STT", "deepgram"],
       ["llm", "llm", "Cloud LLM", "gemini-cloud"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
@@ -4131,7 +4137,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
               about: {
                 library: "pipecat-assist-ui",
-                library_version: "0.1.24",
+                library_version: "0.1.25",
                 platform: "browser",
               },
             },

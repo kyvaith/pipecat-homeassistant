@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.25
+
+- Moved composed realtime turn detection into an explicit VAD processor before
+  STT so cloud STT providers receive end-of-speech signals and can finalize
+  transcripts.
+- Replaced the deprecated incomplete-turn LLM filter in composed pipelines with
+  a cascade speech-timeout turn strategy.
+- Added the Turn detection step to composed presets and migrated existing
+  composed pipelines that were missing it.
+
 ## 0.1.24
 
 - Split Gemini configuration into Google Gemini Live for speech-to-speech
