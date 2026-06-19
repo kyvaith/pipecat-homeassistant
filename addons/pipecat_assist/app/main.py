@@ -48,6 +48,7 @@ from app.config import (
     ConfigStore,
     FlowConfig,
     IntegrationConfig,
+    OPENAI_REALTIME_VOICES,
     RuntimeConfig,
 )
 from app.mcp_bridge import HomeAssistantMCPBridge, check_mcp
@@ -253,6 +254,17 @@ def _realtime_model_matches_provider(provider_kind: str, model: str) -> bool:
     return True
 
 
+def _realtime_voice_matches_provider(provider_kind: str, voice: str) -> bool:
+    voice = (voice or "").strip()
+    if not voice:
+        return False
+    if provider_kind == "gemini":
+        return voice not in OPENAI_REALTIME_VOICES
+    if provider_kind == "openai":
+        return voice in OPENAI_REALTIME_VOICES
+    return True
+
+
 def _model_name(
     flow: FlowConfig,
     integration: IntegrationConfig | None,
@@ -280,12 +292,14 @@ def _model_name(
 
 def _openai_voice(flow: FlowConfig, integration: IntegrationConfig | None) -> str:
     output_step = _output_step(flow)
-    return (
-        (output_step.voice if output_step else "")
-        or flow.voice
-        or (integration.default_voice if integration else "")
-        or DEFAULT_OPENAI_REALTIME_VOICE
-    )
+    for candidate in (
+        output_step.voice if output_step else "",
+        flow.voice,
+        integration.default_voice if integration else "",
+    ):
+        if _realtime_voice_matches_provider("openai", candidate):
+            return candidate
+    return DEFAULT_OPENAI_REALTIME_VOICE
 
 
 def _gemini_model(model: str) -> str:
@@ -295,25 +309,14 @@ def _gemini_model(model: str) -> str:
 
 def _gemini_voice(flow: FlowConfig, integration: IntegrationConfig | None) -> str:
     output_step = _output_step(flow)
-    openai_voice_names = {
-        "alloy",
-        "ash",
-        "ballad",
-        "cedar",
-        "coral",
-        "echo",
-        "fable",
-        "marin",
-        "nova",
-        "onyx",
-        "sage",
-        "shimmer",
-        "verse",
-    }
-    for candidate in ((output_step.voice if output_step else ""), flow.voice):
-        if candidate and candidate not in openai_voice_names:
+    for candidate in (
+        output_step.voice if output_step else "",
+        flow.voice,
+        integration.default_voice if integration else "",
+    ):
+        if _realtime_voice_matches_provider("gemini", candidate):
             return candidate
-    return (integration.default_voice if integration else "") or DEFAULT_GEMINI_LIVE_VOICE
+    return DEFAULT_GEMINI_LIVE_VOICE
 
 
 def _gemini_vad(flow: FlowConfig):

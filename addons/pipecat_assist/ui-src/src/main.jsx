@@ -56,6 +56,18 @@ const GEMINI_LIVE_VOICE = "Charon";
 const OPENAI_TEXT_MODEL = "gpt-5.4-mini";
 const OPENAI_REALTIME_MODEL = "gpt-realtime-2";
 const OPENAI_REALTIME_VOICE = "marin";
+const OPENAI_REALTIME_VOICES = [
+  "alloy",
+  "ash",
+  "ballad",
+  "cedar",
+  "coral",
+  "echo",
+  "marin",
+  "sage",
+  "shimmer",
+  "verse",
+];
 
 const providerKinds = [
   ["openai", "OpenAI", Cloud],
@@ -242,6 +254,14 @@ function realtimeModelMatchesProvider(provider, model) {
   return true;
 }
 
+function realtimeVoiceMatchesProvider(provider, voice) {
+  const value = String(voice || "").trim();
+  if (!value) return false;
+  if (provider === "gemini") return !OPENAI_REALTIME_VOICES.includes(value);
+  if (provider === "openai") return OPENAI_REALTIME_VOICES.includes(value);
+  return true;
+}
+
 function stepsFromTemplate(template) {
   return template.steps.map(([id, kind, label, integrationId]) => ({
     ...makeStep(kind, label, integrationId, id),
@@ -257,6 +277,8 @@ function applyTemplate(flow, templateId) {
   const output = steps.find((step) => step.kind === "output" || step.kind === "tts");
   const stepModel = realtimeModelMatchesProvider(template.provider, llm?.model) ? llm.model : "";
   const flowModel = realtimeModelMatchesProvider(template.provider, flow.model) ? flow.model : "";
+  const stepVoice = realtimeVoiceMatchesProvider(template.provider, output?.voice) ? output.voice : "";
+  const flowVoice = realtimeVoiceMatchesProvider(template.provider, flow.voice) ? flow.voice : "";
   return {
     ...flow,
     mode: template.mode,
@@ -264,7 +286,7 @@ function applyTemplate(flow, templateId) {
     provider_id: llm?.integration_id || template.provider,
     model: stepModel || defaults.model || flowModel || "",
     text_model: defaults.text_model || flow.text_model || "",
-    voice: output?.voice || defaults.voice || flow.voice || "",
+    voice: stepVoice || defaults.voice || flowVoice || "",
     steps,
   };
 }
@@ -290,17 +312,23 @@ function syncFlow(flow) {
   const defaults = providerDefaults(providerId);
   const stepModel = realtimeModelMatchesProvider(providerId, llm?.model) ? llm.model : "";
   const flowModel = realtimeModelMatchesProvider(providerId, flow.model) ? flow.model : "";
-  const steps = (flow.steps || []).map((step) =>
-    step.id === llm?.id && step.model && !realtimeModelMatchesProvider(providerId, step.model)
-      ? { ...step, model: "" }
-      : step,
-  );
+  const stepVoice = realtimeVoiceMatchesProvider(providerId, output?.voice) ? output.voice : "";
+  const flowVoice = realtimeVoiceMatchesProvider(providerId, flow.voice) ? flow.voice : "";
+  const steps = (flow.steps || []).map((step) => {
+    if (step.id === llm?.id && step.model && !realtimeModelMatchesProvider(providerId, step.model)) {
+      return { ...step, model: "" };
+    }
+    if (step.id === output?.id && step.voice && !realtimeVoiceMatchesProvider(providerId, step.voice)) {
+      return { ...step, voice: "" };
+    }
+    return step;
+  });
   return {
     ...flow,
     steps,
     provider_id: providerId,
     model: stepModel || flowModel || defaults.model || "",
-    voice: output?.voice || flow.voice || defaults.voice || "",
+    voice: stepVoice || flowVoice || defaults.voice || "",
     language: flow.language || null,
     max_output_tokens: flow.max_output_tokens ? Number(flow.max_output_tokens) : null,
     reasoning_effort: flow.reasoning_effort || null,
@@ -1514,7 +1542,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
               about: {
                 library: "pipecat-assist-ui",
-                library_version: "0.1.14",
+                library_version: "0.1.15",
                 platform: "browser",
               },
             },

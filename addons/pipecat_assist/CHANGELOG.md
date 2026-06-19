@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.15
+
+- Fixed OpenAI Realtime sessions inheriting Gemini voices such as `Charon`,
+  which caused `session.audio.output.voice` validation errors.
+- Clear invalid MCP URL overrides so the add-on falls back to the Supervisor
+  MCP URL instead of trying values without `http://` or `https://`.
+
 ## 0.1.14
 
 - Fixed OpenAI Realtime pipelines that could inherit a Gemini Live model after
