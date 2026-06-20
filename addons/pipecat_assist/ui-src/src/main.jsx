@@ -4263,7 +4263,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
                 about: {
                   library: "pipecat-assist-ui",
-                  library_version: "0.1.36",
+                  library_version: "0.1.37",
                   platform: "browser",
                 },
             },

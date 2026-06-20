@@ -122,12 +122,17 @@ class PipecatAssistSpeechToTextEntity(stt.SpeechToTextEntity):
                 data=body,
                 headers=headers,
             ) as response:
-                data = await response.json()
                 if response.status >= 400:
+                    try:
+                        data = await response.json()
+                        detail = data.get("detail", "Pipecat Assist STT failed.")
+                    except (aiohttp.ClientError, ValueError):
+                        detail = await response.text()
                     return stt.SpeechResult(
-                        text=data.get("detail", "Pipecat Assist STT failed."),
+                        text=detail or "Pipecat Assist STT failed.",
                         result=stt.SpeechResultState.ERROR,
                     )
+                data = await response.json()
         except aiohttp.ClientError as err:
             return stt.SpeechResult(text=str(err), result=stt.SpeechResultState.ERROR)
 

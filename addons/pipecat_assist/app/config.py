@@ -24,6 +24,7 @@ DEFAULT_INSTRUCTIONS = (
 DEFAULT_GEMINI_TEXT_MODEL = "gemini-3.5-flash"
 DEFAULT_GEMINI_LIVE_MODEL = "models/gemini-3.1-flash-live-preview"
 DEFAULT_GEMINI_LIVE_VOICE = "Charon"
+DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 DEFAULT_OPENAI_TEXT_MODEL = "gpt-5.4-mini"
 DEFAULT_OPENAI_REALTIME_MODEL = "gpt-realtime-2"
 DEFAULT_OPENAI_REALTIME_VOICE = "marin"
@@ -186,6 +187,7 @@ def default_integrations() -> list[IntegrationConfig]:
             enabled=bool(os.getenv("GOOGLE_API_KEY")),
             api_key=os.getenv("GOOGLE_API_KEY", ""),
             default_realtime_model=os.getenv("GEMINI_LIVE_MODEL", DEFAULT_GEMINI_LIVE_MODEL),
+            default_tts_model=os.getenv("GEMINI_TTS_MODEL", DEFAULT_GEMINI_TTS_MODEL),
             default_voice=os.getenv("GEMINI_LIVE_VOICE", DEFAULT_GEMINI_LIVE_VOICE),
         ),
         IntegrationConfig(
@@ -195,6 +197,7 @@ def default_integrations() -> list[IntegrationConfig]:
             enabled=bool(os.getenv("GOOGLE_API_KEY")),
             api_key=os.getenv("GOOGLE_API_KEY", ""),
             default_model=os.getenv("GEMINI_TEXT_MODEL", DEFAULT_GEMINI_TEXT_MODEL),
+            default_tts_model=os.getenv("GEMINI_TTS_MODEL", DEFAULT_GEMINI_TTS_MODEL),
         ),
         IntegrationConfig(
             id="openai",

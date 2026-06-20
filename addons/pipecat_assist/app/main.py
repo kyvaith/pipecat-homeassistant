@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import hmac
 import os
 import time
@@ -55,6 +56,7 @@ from app.config import (
     DEFAULT_GEMINI_LIVE_MODEL,
     DEFAULT_GEMINI_LIVE_VOICE,
     DEFAULT_GEMINI_TEXT_MODEL,
+    DEFAULT_GEMINI_TTS_MODEL,
     DEFAULT_GOOGLE_TTS_VOICE,
     DEFAULT_OPENAI_TEXT_MODEL,
     DEFAULT_OPENAI_REALTIME_MODEL,
@@ -103,6 +105,8 @@ TTS_MEDIA_TYPES = {
     "pcm": "audio/L16",
     "wav": "audio/wav",
 }
+HA_STT_BRIDGE_KINDS = {"deepgram", "gemini", "gemini_cloud", "openai", "openai_cloud"}
+HA_TTS_BRIDGE_KINDS = {"elevenlabs", "gemini", "gemini_cloud", "openai", "openai_cloud"}
 
 app.mount("/assets", StaticFiles(directory=UI_DIR), name="assets")
 
@@ -180,6 +184,78 @@ def _preferred_tts_format(payload: dict[str, Any]) -> str:
         return "mp3"
     preferred = str(options.get("preferred_format") or "").strip().lower()
     return preferred if preferred in OPENAI_TTS_FORMATS else "mp3"
+
+
+def _gemini_model_path(model: str) -> str:
+    clean = (model or "").strip() or DEFAULT_GEMINI_TEXT_MODEL
+    return clean.removeprefix("models/")
+
+
+async def _gemini_generate_content(
+    api_key: str,
+    model: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{quote(_gemini_model_path(model), safe='')}:generateContent"
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        response = await client.post(url, params={"key": api_key}, json=payload)
+        response.raise_for_status()
+    data = response.json()
+    return data if isinstance(data, dict) else {}
+
+
+def _gemini_text(data: dict[str, Any]) -> str:
+    for candidate in data.get("candidates") or []:
+        for part in (candidate.get("content") or {}).get("parts") or []:
+            text = part.get("text")
+            if text:
+                return str(text).strip()
+    return ""
+
+
+def _gemini_inline_audio(data: dict[str, Any]) -> tuple[bytes, str]:
+    for candidate in data.get("candidates") or []:
+        for part in (candidate.get("content") or {}).get("parts") or []:
+            inline = part.get("inlineData") or part.get("inline_data") or {}
+            encoded = inline.get("data")
+            if encoded:
+                return base64.b64decode(encoded), str(inline.get("mimeType") or inline.get("mime_type") or "audio/wav")
+    raise HTTPException(status_code=502, detail="Gemini did not return audio")
+
+
+def _audio_extension_for_media_type(media_type: str) -> str:
+    clean = media_type.lower().split(";")[0].strip()
+    return {
+        "audio/aac": "aac",
+        "audio/flac": "flac",
+        "audio/l16": "wav",
+        "audio/mpeg": "mp3",
+        "audio/mp3": "mp3",
+        "audio/ogg": "opus",
+        "audio/pcm": "wav",
+        "audio/wav": "wav",
+        "audio/x-wav": "wav",
+    }.get(clean, "wav")
+
+
+def _mime_param(media_type: str, name: str) -> str:
+    for chunk in media_type.split(";")[1:]:
+        key, _, value = chunk.strip().partition("=")
+        if key.lower() == name:
+            return value.strip()
+    return ""
+
+
+def _normalize_inline_audio(audio: bytes, media_type: str) -> tuple[bytes, str, str]:
+    extension = _audio_extension_for_media_type(media_type)
+    if extension == "wav" and not audio.startswith(b"RIFF"):
+        sample_rate = int(_mime_param(media_type, "rate") or _mime_param(media_type, "sample_rate") or 24000)
+        return (
+            _wav_from_pcm(audio, sample_rate=sample_rate, sample_width=2, channels=1),
+            "audio/wav",
+            "wav",
+        )
+    return audio, media_type.split(";")[0] or "audio/wav", extension
 
 
 @app.middleware("http")
@@ -435,7 +511,9 @@ async def api_stt(request: Request, flow_id: str | None = None):
 
     config = STORE.load()
     flow = config.selected_flow(flow_id)
-    step, integration = _step_integration(config, flow, "stt")
+    step, integration = _ha_assist_step_integration(config, flow, "stt", HA_STT_BRIDGE_KINDS)
+    if not integration:
+        raise _bridge_unavailable("STT", "Google Gemini, OpenAI Cloud, OpenAI Realtime, or Deepgram")
     integration = _require_integration(integration, "STT", fields=())
     model = _step_model_for(step, integration, "stt", DEFAULT_OPENAI_STT_MODEL)
     audio = await request.body()
@@ -446,7 +524,7 @@ async def api_stt(request: Request, flow_id: str | None = None):
     if integration.kind in {"openai", "openai_cloud"}:
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=_integration_api_key(integration, "STT", config.openai_api_key))
+        client = AsyncOpenAI(api_key=_integration_api_key_or_400(integration, "STT", config.openai_api_key))
         result = await client.audio.transcriptions.create(
             file=("speech.wav", BytesIO(stt_audio), stt_content_type),
             model=model or DEFAULT_OPENAI_STT_MODEL,
@@ -454,9 +532,38 @@ async def api_stt(request: Request, flow_id: str | None = None):
         )
         return {"text": (getattr(result, "text", "") or "").strip()}
 
+    if integration.kind in {"gemini", "gemini_cloud"}:
+        api_key = _integration_api_key_or_400(integration, "STT", os.getenv("GOOGLE_API_KEY", ""))
+        data = await _gemini_generate_content(
+            api_key,
+            integration.default_model or flow.text_model or DEFAULT_GEMINI_TEXT_MODEL,
+            {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": (
+                                    "Transcribe the provided speech to plain text. "
+                                    "Return only the transcript, without commentary."
+                                )
+                            },
+                            {
+                                "inlineData": {
+                                    "mimeType": stt_content_type,
+                                    "data": base64.b64encode(stt_audio).decode("ascii"),
+                                }
+                            },
+                        ],
+                    }
+                ]
+            },
+        )
+        return {"text": _gemini_text(data)}
+
     if integration.kind == "deepgram":
         headers = {
-            "Authorization": f"Token {_integration_api_key(integration, 'STT')}",
+            "Authorization": f"Token {_integration_api_key_or_400(integration, 'STT')}",
             "Content-Type": stt_content_type,
         }
         params = {"model": model or DEFAULT_DEEPGRAM_MODEL, "smart_format": "true"}
@@ -474,7 +581,7 @@ async def api_stt(request: Request, flow_id: str | None = None):
 
     raise HTTPException(
         status_code=400,
-        detail=f"HA Assist STT bridge does not support {integration.name}. Use a composed pipeline with OpenAI Cloud or Deepgram STT.",
+        detail=f"HA Assist STT bridge does not support {integration.name}. Use Gemini, OpenAI Cloud, OpenAI Realtime, or Deepgram STT.",
     )
 
 
@@ -488,7 +595,9 @@ async def api_tts(payload: dict[str, Any]):
     if not text:
         raise HTTPException(status_code=400, detail="No text was provided")
 
-    step, integration = _step_integration(config, flow, "tts")
+    step, integration = _ha_assist_step_integration(config, flow, "tts", HA_TTS_BRIDGE_KINDS)
+    if not integration:
+        raise _bridge_unavailable("TTS", "Google Gemini, OpenAI Cloud, OpenAI Realtime, or ElevenLabs")
     integration = _require_integration(integration, "TTS", fields=())
     model = _step_model_for(step, integration, "tts", DEFAULT_OPENAI_TTS_MODEL)
     voice = _step_voice(step, integration, DEFAULT_OPENAI_TTS_VOICE)
@@ -497,7 +606,7 @@ async def api_tts(payload: dict[str, Any]):
     if integration.kind in {"openai", "openai_cloud"}:
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=_integration_api_key(integration, "TTS", config.openai_api_key))
+        client = AsyncOpenAI(api_key=_integration_api_key_or_400(integration, "TTS", config.openai_api_key))
         result = await client.audio.speech.create(
             model=model or DEFAULT_OPENAI_TTS_MODEL,
             voice=voice or DEFAULT_OPENAI_TTS_VOICE,
@@ -511,10 +620,32 @@ async def api_tts(payload: dict[str, Any]):
             headers={"X-Audio-Extension": response_format},
         )
 
+    if integration.kind in {"gemini", "gemini_cloud"}:
+        api_key = _integration_api_key_or_400(integration, "TTS", os.getenv("GOOGLE_API_KEY", ""))
+        data = await _gemini_generate_content(
+            api_key,
+            integration.default_tts_model or DEFAULT_GEMINI_TTS_MODEL,
+            {
+                "contents": [{"role": "user", "parts": [{"text": text}]}],
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {
+                        "voiceConfig": {
+                            "prebuiltVoiceConfig": {
+                                "voiceName": voice or integration.default_voice or DEFAULT_GEMINI_LIVE_VOICE,
+                            }
+                        }
+                    },
+                },
+            },
+        )
+        audio, media_type, extension = _normalize_inline_audio(*_gemini_inline_audio(data))
+        return Response(content=audio, media_type=media_type, headers={"X-Audio-Extension": extension})
+
     if integration.kind == "elevenlabs":
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice or DEFAULT_ELEVENLABS_VOICE}"
         headers = {
-            "xi-api-key": _integration_api_key(integration, "TTS"),
+            "xi-api-key": _integration_api_key_or_400(integration, "TTS"),
             "Content-Type": "application/json",
             "Accept": "audio/mpeg",
         }
@@ -529,7 +660,7 @@ async def api_tts(payload: dict[str, Any]):
 
     raise HTTPException(
         status_code=400,
-        detail=f"HA Assist TTS bridge does not support {integration.name}. Use a composed pipeline with OpenAI Cloud or ElevenLabs TTS.",
+        detail=f"HA Assist TTS bridge does not support {integration.name}. Use Gemini, OpenAI Cloud, OpenAI Realtime, or ElevenLabs TTS.",
     )
 
 
@@ -664,6 +795,57 @@ def _step_integration(
     return step, config.integration(step.integration_id)
 
 
+def _configured_integration(integration: IntegrationConfig | None) -> bool:
+    return bool(integration and integration.enabled)
+
+
+def _ha_assist_step_integration(
+    config: RuntimeConfig,
+    flow: FlowConfig,
+    kind: str,
+    supported_kinds: set[str],
+) -> tuple[Any, IntegrationConfig | None]:
+    """Return the explicit HA Assist step integration or a compatible fallback."""
+
+    step, integration = _step_integration(config, flow, kind)
+    if _configured_integration(integration) and integration.kind in supported_kinds:
+        return step, integration
+
+    preferred_ids = [
+        flow.provider_id,
+        "gemini",
+        "gemini-cloud",
+        "openai-cloud",
+        "openai",
+        "deepgram",
+        "elevenlabs",
+    ]
+    seen: set[str] = set()
+    for integration_id in preferred_ids:
+        if not integration_id or integration_id in seen:
+            continue
+        seen.add(integration_id)
+        candidate = config.integration(integration_id)
+        if _configured_integration(candidate) and candidate.kind in supported_kinds:
+            return None, candidate
+
+    for candidate in config.integrations:
+        if _configured_integration(candidate) and candidate.kind in supported_kinds:
+            return None, candidate
+    return step, None
+
+
+def _bridge_unavailable(role: str, supported_names: str) -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail=(
+            f"HA Assist {role} requires an enabled compatible integration. "
+            f"Configure one of: {supported_names}. Speech-to-speech pipelines "
+            "such as Gemini Live do not expose separate STT/TTS steps to classic HA Assist."
+        ),
+    )
+
+
 def _secret(integration: IntegrationConfig | None, field: str = "api_key") -> str:
     if not integration:
         return ""
@@ -788,6 +970,17 @@ def _integration_api_key(
     if not api_key:
         raise RuntimeError(f"{integration.name} is missing api_key for {role}")
     return api_key
+
+
+def _integration_api_key_or_400(
+    integration: IntegrationConfig,
+    role: str,
+    fallback: str = "",
+) -> str:
+    try:
+        return _integration_api_key(integration, role, fallback)
+    except RuntimeError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
 
 
 def _step_model(step, integration: IntegrationConfig | None, fallback: str = "") -> str:

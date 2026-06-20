@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.37
+
+- Fixed HA Assist STT/TTS failures when the active pipeline is speech-to-speech
+  and has no separate STT or TTS steps.
+- Added automatic HA Assist bridge fallbacks for enabled compatible
+  integrations, including Gemini STT/TTS using the existing Google API key.
+- Replaced unhandled add-on RuntimeErrors for missing HA Assist bridge
+  integrations with clear HTTP errors.
+
 ## 0.1.36
 
 - Fixed the classic Home Assistant Assist bridge by wrapping raw PCM microphone
