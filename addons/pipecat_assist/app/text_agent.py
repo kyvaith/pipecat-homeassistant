@@ -12,7 +12,7 @@ from openai import AsyncOpenAI
 
 from app.config import DEFAULT_GEMINI_TEXT_MODEL, DEFAULT_WEB_SEARCH_MODEL, RuntimeConfig
 from app.mcp_bridge import HomeAssistantMCPBridge
-from app.web_search_tool import WEB_SEARCH_TOOL_NAME, run_openai_web_search
+from app.web_search_tool import WEB_SEARCH_TOOL_NAME, run_gemini_web_search, run_openai_web_search
 
 
 def _format_openai_tools(tools_schema) -> list[dict[str, Any]]:
@@ -54,16 +54,60 @@ def _text_model(config: RuntimeConfig, provider_kind: str, integration, flow) ->
     return model
 
 
-def _web_search_tool(config: RuntimeConfig, flow) -> tuple[dict[str, Any], str, str] | None:
-    if not flow.web_search_enabled:
+def _web_search_step(flow):
+    return next((step for step in flow.steps if step.kind == "web_search" and step.enabled), None)
+
+
+def _web_search_enabled(flow) -> bool:
+    return bool(flow.web_search_enabled or _web_search_step(flow))
+
+
+def _web_search_announces(flow) -> bool:
+    step = _web_search_step(flow)
+    return bool(step and (step.settings or {}).get("announce", True))
+
+
+def _effective_instructions(flow) -> str:
+    instructions = flow.instructions
+    if _web_search_announces(flow):
+        instructions += (
+            "\n\nWhen you decide to use web search, first say "
+            '"Please hold, I\'m checking." Then run the search and answer briefly.'
+        )
+    return instructions
+
+
+def _web_search_tool(config: RuntimeConfig, flow) -> tuple[dict[str, Any], Any, str] | None:
+    if not _web_search_enabled(flow):
         return None
     integration = config.integration("web-search")
     if not integration or not integration.enabled:
         return None
-    api_key = (integration.api_key or config.openai_api_key or "").strip()
-    if not api_key:
+    provider = config.integration(integration.provider_id or "openai-cloud")
+    if not provider:
         return None
-    model = integration.default_model or DEFAULT_WEB_SEARCH_MODEL
+    model = integration.default_model or provider.default_model or DEFAULT_WEB_SEARCH_MODEL
+    if provider.kind in {"openai", "openai_cloud"}:
+        api_key = (provider.api_key or integration.api_key or config.openai_api_key or "").strip()
+        if not api_key:
+            return None
+
+        async def runner(query: str) -> str:
+            return await run_openai_web_search(api_key, model, query)
+
+    elif provider.kind in {"gemini", "gemini_cloud"}:
+        if model.startswith(("gpt-", "o", "claude-")):
+            model = provider.default_model or DEFAULT_GEMINI_TEXT_MODEL
+        api_key = (provider.api_key or integration.api_key or os.getenv("GOOGLE_API_KEY", "")).strip()
+        if not api_key:
+            return None
+
+        async def runner(query: str) -> str:
+            return await run_gemini_web_search(api_key, model or DEFAULT_GEMINI_TEXT_MODEL, query)
+
+    else:
+        return None
+
     return (
         {
             "type": "function",
@@ -82,7 +126,7 @@ def _web_search_tool(config: RuntimeConfig, flow) -> tuple[dict[str, Any], str, 
                 },
             },
         },
-        api_key,
+        runner,
         model,
     )
 
@@ -124,12 +168,12 @@ async def run_text_conversation(
         }
 
     system = (
-        f"{flow.instructions}\n\n"
+        f"{_effective_instructions(flow)}\n\n"
         "You are answering through Home Assistant Conversation text mode. "
         "Use MCP tools silently for explicit smart-home requests. "
         "Keep the final answer short and natural."
     )
-    if language:
+    if language and str(language).lower() != "pipecat-assist":
         system += f"\nThe user's language is {language}."
 
     messages: list[dict[str, Any]] = [
@@ -223,12 +267,8 @@ async def run_text_conversation(
                     if not web_search:
                         result = "Web search is not configured."
                     else:
-                        _, search_api_key, search_model = web_search
-                        result = await run_openai_web_search(
-                            search_api_key,
-                            search_model,
-                            str(arguments.get("query") or text),
-                        )
+                        _, search_runner, _ = web_search
+                        result = await search_runner(str(arguments.get("query") or text))
                 else:
                     result = await bridge.call_tool(tool_call.function.name, arguments)
                 messages.append(

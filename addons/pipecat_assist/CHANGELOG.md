@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.29
+
+- Added visible pipeline steps for Session Memory and Web Search, including a
+  Web Search announcement switch.
+- Let Web Search choose a cloud LLM provider instead of assuming OpenAI; OpenAI
+  Responses web search and Gemini Google Search grounding are supported.
+- Added Polish UI translations with automatic locale detection and moved the
+  dark-mode control to an icon button in the top bar.
+- Added Home Assistant STT and TTS entities plus a Lovelace WebRTC card for
+  Pipecat Assist.
+- Fixed the active pipeline badge CSS and relabeled Google Cloud TTS HTTP as a
+  fallback provider.
+
 ## 0.1.28
 
 - Added Web Search as a separate integration and optional LLM tool for

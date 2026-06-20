@@ -145,6 +145,7 @@ class IntegrationConfig(BaseModel):
     organization: str = ""
     project: str = ""
     location: str = ""
+    provider_id: str = ""
     credentials_json: str = ""
     credentials_path: str = ""
     access_key_id: str = ""
@@ -160,7 +161,7 @@ class PipelineStepConfig(BaseModel):
     """One visible step in the pipeline editor."""
 
     id: str
-    kind: Literal["transport", "vad", "stt", "llm", "tools", "flow", "tts", "output"]
+    kind: Literal["transport", "memory", "vad", "stt", "llm", "web_search", "tools", "flow", "tts", "output"]
     label: str
     enabled: bool = True
     integration_id: str = ""
@@ -217,7 +218,7 @@ def default_integrations() -> list[IntegrationConfig]:
         ),
         IntegrationConfig(
             id="google-cloud-tts",
-            name="Google Cloud TTS HTTP",
+            name="Google Cloud TTS HTTP fallback",
             kind="google_cloud_tts",
             enabled=bool(os.getenv("GOOGLE_APPLICATION_CREDENTIALS")),
             credentials_path=os.getenv("GOOGLE_APPLICATION_CREDENTIALS", ""),
@@ -339,6 +340,7 @@ def default_integrations() -> list[IntegrationConfig]:
             kind="web_search",
             enabled=False,
             api_key=os.getenv("OPENAI_API_KEY", ""),
+            provider_id=os.getenv("WEB_SEARCH_PROVIDER_ID", "openai-cloud"),
             default_model=os.getenv("WEB_SEARCH_MODEL", DEFAULT_WEB_SEARCH_MODEL),
         ),
         IntegrationConfig(
@@ -357,6 +359,7 @@ def default_steps() -> list[PipelineStepConfig]:
 
     return [
         PipelineStepConfig(id="transport", kind="transport", label="SmallWebRTC"),
+        PipelineStepConfig(id="memory", kind="memory", label="Session memory"),
         PipelineStepConfig(
             id="vad",
             kind="vad",
@@ -369,6 +372,14 @@ def default_steps() -> list[PipelineStepConfig]:
             label="Live model",
             integration_id="gemini",
             model=os.getenv("GEMINI_LIVE_MODEL", DEFAULT_GEMINI_LIVE_MODEL),
+        ),
+        PipelineStepConfig(
+            id="web-search",
+            kind="web_search",
+            label="Web Search",
+            enabled=False,
+            integration_id="web-search",
+            settings={"announce": True},
         ),
         PipelineStepConfig(
             id="tools",
@@ -457,6 +468,7 @@ class FlowConfig(BaseModel):
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh"] | None = None
     mcp_enabled: bool = True
     mcp_tool_allowlist: list[str] = Field(default_factory=list)
+    memory_enabled: bool = True
     web_search_enabled: bool = False
     video_enabled: bool = False
     steps: list[PipelineStepConfig] = Field(default_factory=default_steps)
@@ -476,7 +488,7 @@ class FlowConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 14
+    version: int = 15
     openai_api_key: str = ""
     text_model: str = DEFAULT_GEMINI_TEXT_MODEL
     ha_mcp_url: str = ""
@@ -809,7 +821,7 @@ def _repair_composed_gemini_integrations(config: RuntimeConfig, flow: FlowConfig
         elif step.kind == "stt":
             step.integration_id = "deepgram" if config.integration("deepgram") else ""
         elif step.kind == "tts":
-            step.integration_id = "google-cloud-tts" if config.integration("google-cloud-tts") else ""
+            step.integration_id = "google-streaming-tts" if config.integration("google-streaming-tts") else ""
         else:
             continue
         step.model = ""
@@ -878,6 +890,57 @@ def _ensure_composed_vad_step(flow: FlowConfig) -> bool:
         ),
     )
     return True
+
+
+def _ensure_control_steps(flow: FlowConfig) -> bool:
+    """Add non-audio pipeline control steps introduced after early configs."""
+
+    changed = False
+    existing = {step.kind for step in flow.steps}
+
+    def insert_after(after_kind: str, step: PipelineStepConfig) -> None:
+        nonlocal changed
+        if step.kind in existing:
+            return
+        insert_at = next(
+            (index + 1 for index, item in enumerate(flow.steps) if item.kind == after_kind),
+            len(flow.steps),
+        )
+        flow.steps.insert(min(insert_at, len(flow.steps)), step)
+        existing.add(step.kind)
+        changed = True
+
+    insert_after(
+        "transport",
+        PipelineStepConfig(
+            id="memory",
+            kind="memory",
+            label="Session memory",
+            enabled=flow.memory_enabled,
+        ),
+    )
+    insert_after(
+        "llm",
+        PipelineStepConfig(
+            id="web-search",
+            kind="web_search",
+            label="Web Search",
+            enabled=flow.web_search_enabled,
+            integration_id="web-search",
+            settings={"announce": True},
+        ),
+    )
+
+    has_memory = any(step.kind == "memory" and step.enabled for step in flow.steps)
+    has_web_search = any(step.kind == "web_search" and step.enabled for step in flow.steps)
+    if flow.memory_enabled != has_memory:
+        flow.memory_enabled = has_memory
+        changed = True
+    if flow.web_search_enabled != has_web_search:
+        flow.web_search_enabled = has_web_search
+        changed = True
+
+    return changed
 
 
 def _repair_mcp_url_overrides(config: RuntimeConfig) -> bool:
@@ -983,8 +1046,8 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
 
     google_tts = config.integration("google-cloud-tts")
     if google_tts:
-        if google_tts.name == "Google Cloud TTS":
-            google_tts.name = "Google Cloud TTS HTTP"
+        if google_tts.name in {"Google Cloud TTS", "Google Cloud TTS HTTP"}:
+            google_tts.name = "Google Cloud TTS HTTP fallback"
             changed = True
         if not google_tts.default_voice:
             google_tts.default_voice = os.getenv("GOOGLE_TTS_VOICE", DEFAULT_GOOGLE_TTS_VOICE)
@@ -1009,6 +1072,9 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
 
     web_search = config.integration("web-search")
     if web_search:
+        if not web_search.provider_id:
+            web_search.provider_id = os.getenv("WEB_SEARCH_PROVIDER_ID", "openai-cloud")
+            changed = True
         if not web_search.default_model:
             web_search.default_model = os.getenv("WEB_SEARCH_MODEL", DEFAULT_WEB_SEARCH_MODEL)
             changed = True
@@ -1215,6 +1281,12 @@ class ConfigStore:
             config.version = 14
             changed = True
 
+        if config.version < 15:
+            config.version = 15
+            for flow in config.flows:
+                changed = _ensure_control_steps(flow) or changed
+            changed = True
+
         for flow in config.flows:
             if not flow.language:
                 flow.language = "en"
@@ -1323,6 +1395,7 @@ class ConfigStore:
             _repair_composed_openai_integrations(config, flow)
             _repair_composed_gemini_integrations(config, flow)
             _repair_flow_provider_model(config, flow)
+            _strip_unsupported_s2s_flow_steps(config, flow)
         _repair_mcp_url_overrides(config)
         self.save(config)
         return config

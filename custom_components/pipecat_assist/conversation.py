@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Literal
-
 import aiohttp
 
 from homeassistant.components import conversation
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import CONF_FLOW_ID, CONF_TOKEN, CONF_URL
+from .const import CONF_FLOW_ID, CONF_TOKEN, CONF_URL, LANGUAGE
 
 
 async def async_setup_entry(
@@ -32,7 +29,7 @@ class PipecatAssistConversationEntity(conversation.ConversationEntity):
     """Conversation entity backed by the Pipecat Assist add-on."""
 
     _attr_has_entity_name = True
-    _attr_name = "Pipecat Realtime"
+    _attr_name = "Pipecat Assist"
     _attr_supported_features = conversation.ConversationEntityFeature.CONTROL
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -42,10 +39,10 @@ class PipecatAssistConversationEntity(conversation.ConversationEntity):
         self._session = async_get_clientsession(hass)
 
     @property
-    def supported_languages(self) -> list[str] | Literal["*"]:
+    def supported_languages(self) -> list[str]:
         """Return supported languages."""
 
-        return MATCH_ALL
+        return [LANGUAGE]
 
     async def async_process(
         self, user_input: conversation.ConversationInput

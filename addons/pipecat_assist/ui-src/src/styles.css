@@ -215,7 +215,7 @@ h3 {
 }
 
 .topbar > div > span,
-.panel-head > div > span {
+.panel-head > div > span:not(.active-badge) {
   display: inline-block;
   margin-top: 4px;
   color: var(--muted);
@@ -1144,16 +1144,21 @@ html[data-theme="dark"] .state.error {
 }
 
 .theme-toggle {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  margin-top: auto;
+  gap: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px;
+  width: 38px;
+  height: 38px;
+  padding: 0;
   color: var(--ink);
   background: transparent;
+}
+
+.theme-toggle.icon-only {
+  flex: 0 0 auto;
 }
 
 .status-pill {
@@ -1332,14 +1337,11 @@ html[data-theme="dark"] .status-pill.error {
 }
 
 .active-badge {
-  display: inline-grid;
-  grid-auto-flow: column;
-  grid-auto-columns: max-content;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-sizing: border-box;
   width: auto;
-  min-width: 104px;
+  min-width: 92px;
   height: 38px;
   min-height: 38px;
   flex: 0 0 auto;

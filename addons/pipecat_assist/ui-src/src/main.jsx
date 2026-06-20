@@ -9,6 +9,7 @@ import {
   Cloud,
   Copy,
   Cpu,
+  Database,
   Download,
   GitBranch,
   Home,
@@ -31,6 +32,85 @@ import {
   X,
 } from "lucide-react";
 import "./styles.css";
+
+const UI_TRANSLATIONS = {
+  pl: {
+    "Assistant": "Asystent",
+    "Pipelines": "Pipeline'y",
+    "Integrations": "Integracje",
+    "Runtime": "Runtime",
+    "ready": "gotowy",
+    "setup needed": "wymagana konfiguracja",
+    "Back to pipeline": "Wróć do pipeline",
+    "Back to pipelines": "Wróć do pipeline'ów",
+    "Back to integrations": "Wróć do integracji",
+    "Light mode": "Tryb jasny",
+    "Dark mode": "Tryb ciemny",
+    "Loading": "Ładowanie",
+    "Interface did not load": "Interfejs się nie załadował",
+    "Retry": "Ponów",
+    "Add pipeline": "Dodaj pipeline",
+    "Set active": "Ustaw aktywny",
+    "Active": "Aktywny",
+    "Duplicate": "Duplikuj",
+    "Delete": "Usuń",
+    "Save": "Zapisz",
+    "Save pipeline": "Zapisz pipeline",
+    "Save integration": "Zapisz integrację",
+    "Save runtime": "Zapisz runtime",
+    "Reset defaults": "Przywróć domyślne",
+    "Pipeline is valid.": "Pipeline jest poprawny.",
+    "Ready": "Gotowy",
+    "Setup needed": "Wymagana konfiguracja",
+    "Connected": "Połączono",
+    "Connecting": "Łączenie",
+    "Needs attention": "Wymaga uwagi",
+    "Idle": "Bezczynny",
+    "Microphone": "Mikrofon",
+    "Start voice test": "Rozpocznij test głosu",
+    "Stop voice test": "Zatrzymaj test głosu",
+    "Edit active pipeline": "Edytuj aktywny pipeline",
+    "The easiest way to get started is with Gemini Live.": "Najłatwiej zacząć od Gemini Live.",
+    "Google AI Studio": "Google AI Studio",
+    "Integration": "Integracja",
+    "Step enabled": "Krok aktywny",
+    "Instructions": "Instrukcje",
+    "No greeting": "Bez powitania",
+    "Greeting": "Powitanie",
+    "Announce web search": "Zapowiadaj web search",
+    "Enabled": "Włączone",
+    "Name": "Nazwa",
+    "Cloud LLM provider": "Provider Cloud LLM",
+    "Search model": "Model wyszukiwania",
+    "Home Assistant actions": "Akcje Home Assistant",
+    "Audio debug": "Debug audio",
+    "Refresh": "Odśwież",
+    "Clear": "Wyczyść",
+    "Record audio in/out": "Nagrywaj audio wej./wyj.",
+    "Session memory": "Pamięć sesji",
+    "Memory reuse": "Ponowne użycie pamięci",
+    "Memory messages": "Wiadomości pamięci",
+    "MCP tools cache": "Cache narzędzi MCP",
+    "MCP cache TTL": "TTL cache MCP",
+  },
+};
+
+function detectLocale() {
+  const candidates = [
+    document.documentElement.lang,
+    window.localStorage.getItem("selectedLanguage"),
+    window.localStorage.getItem("language"),
+    navigator.language,
+    ...(navigator.languages || []),
+  ].filter(Boolean);
+  return candidates.some((value) => String(value).toLowerCase().startsWith("pl")) ? "pl" : "en";
+}
+
+const UI_LOCALE = detectLocale();
+
+function t(value) {
+  return UI_TRANSLATIONS[UI_LOCALE]?.[value] || value;
+}
 
 function documentBaseUrl() {
   const script = [...document.scripts].find((item) => {
@@ -101,7 +181,7 @@ const providerKinds = [
   ["openai_cloud", "OpenAI Cloud", Cloud],
   ["gemini", "Google Gemini Live", Radio],
   ["gemini_cloud", "Google Gemini Cloud", Cloud],
-  ["google_cloud_tts", "Google Cloud TTS HTTP", Cloud],
+  ["google_cloud_tts", "Google Cloud TTS HTTP fallback", Cloud],
   ["google_streaming_tts", "Google Cloud TTS Streaming", Radio],
   ["soniox", "Soniox", Cloud],
   ["deepgram", "Deepgram", Cloud],
@@ -138,12 +218,15 @@ const languageIntegrationKinds = [
 
 const speedIntegrationKinds = ["openai", "openai_cloud", "google_cloud_tts", "elevenlabs"];
 const ttsStreamingIntegrationKinds = ["cartesia", "elevenlabs", "soniox", "gradium", "google_streaming_tts"];
+const webSearchProviderKinds = ["openai_cloud", "gemini_cloud", "openai_compatible"];
 
 const stepTypes = [
   ["transport", "Transport", Radio, "neutral"],
+  ["memory", "Memory", Database, "green"],
   ["vad", "Turn", Mic2, "amber"],
   ["stt", "STT", Mic2, "blue"],
   ["llm", "Model", Bot, "violet"],
+  ["web_search", "Web Search", Search, "blue"],
   ["tools", "Tools", Wrench, "green"],
   ["flow", "Pipecat Flow", Workflow, "rose"],
   ["tts", "TTS", Volume2, "mint"],
@@ -157,9 +240,10 @@ const stepProviders = {
   llm: ["openai_cloud", "gemini_cloud", "aws_bedrock", "openai_compatible", "ollama"],
   tts: ["cartesia", "gradium", "google_cloud_tts", "google_streaming_tts", "elevenlabs", "openai_cloud", "soniox"],
   tools: ["home_assistant_mcp"],
+  web_search: ["web_search"],
   output: ["gemini", "openai", "aws_nova_sonic"],
 };
-const runtimeStepOrder = ["transport", "vad", "stt", "llm", "tools", "flow", "tts", "output"];
+const runtimeStepOrder = ["transport", "memory", "vad", "stt", "llm", "web_search", "tools", "flow", "tts", "output"];
 
 function allowedProvidersForStep(kind, mode) {
   if (kind === "llm" && mode === "realtime") return ["gemini", "openai", "aws_nova_sonic"];
@@ -183,8 +267,10 @@ const templates = [
     accent: "blue",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Gemini VAD", ""],
       ["llm", "llm", "Live model", "gemini"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["output", "output", "Native audio", "gemini"],
     ],
@@ -199,8 +285,10 @@ const templates = [
     accent: "green",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Semantic VAD", ""],
       ["llm", "llm", "Realtime model", "openai"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["output", "output", "Audio output", "openai"],
     ],
@@ -215,8 +303,10 @@ const templates = [
     accent: "amber",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Nova Sonic VAD", ""],
       ["llm", "llm", "Nova Sonic", "aws-nova-sonic"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["output", "output", "Native audio", "aws-nova-sonic"],
     ],
@@ -231,9 +321,11 @@ const templates = [
     accent: "mint",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Soniox STT", "soniox"],
       ["llm", "llm", "OpenAI LLM", "openai-cloud"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "Cartesia TTS", "cartesia"],
@@ -250,9 +342,11 @@ const templates = [
     accent: "mint",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Soniox STT", "soniox"],
       ["llm", "llm", "OpenAI LLM", "openai-cloud"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "Gradium TTS", "gradium"],
@@ -269,9 +363,11 @@ const templates = [
     accent: "blue",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Deepgram STT", "deepgram"],
       ["llm", "llm", "Gemini Cloud LLM", "gemini-cloud"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "Google TTS Streaming", "google-streaming-tts"],
@@ -288,9 +384,11 @@ const templates = [
     accent: "blue",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Deepgram STT", "deepgram"],
       ["llm", "llm", "Gemini Cloud LLM", "gemini-cloud"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "Google TTS Streaming", "google-streaming-tts"],
@@ -307,9 +405,11 @@ const templates = [
     accent: "rose",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Speechmatics STT", "speechmatics"],
       ["llm", "llm", "AWS Nova Pro", "bedrock"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "ElevenLabs TTS", "elevenlabs"],
@@ -326,9 +426,11 @@ const templates = [
     accent: "blue",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Turn detection", ""],
       ["stt", "stt", "Cloud STT", "deepgram"],
       ["llm", "llm", "Cloud LLM", "gemini-cloud"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "Cloud TTS", "google-streaming-tts"],
@@ -345,9 +447,11 @@ const templates = [
     accent: "amber",
     steps: [
       ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
       ["vad", "vad", "Local VAD", "local-runtime"],
       ["stt", "stt", "Local STT", "local-runtime"],
       ["llm", "llm", "Local LLM", "ollama"],
+      ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["flow", "flow", "Pipecat Flow", ""],
       ["tts", "tts", "Local TTS", "local-runtime"],
@@ -390,6 +494,7 @@ const defaultFlow = {
   reasoning_effort: "",
   mcp_enabled: true,
   mcp_tool_allowlist: [],
+  memory_enabled: true,
   web_search_enabled: false,
   video_enabled: false,
   steps: [],
@@ -901,10 +1006,10 @@ function makeStep(kind, label, integrationId = "", suffix = "") {
     kind,
     label,
     enabled: kind !== "flow",
-    integration_id: integrationId,
+    integration_id: kind === "web_search" ? integrationId || "web-search" : integrationId,
     model: "",
     voice: "",
-    settings: {},
+    settings: kind === "web_search" ? { announce: true } : {},
   };
 }
 
@@ -1034,7 +1139,7 @@ function stepsFromTemplate(template, config) {
     return {
       ...makeStep(kind, label, integrationId, id),
       id,
-      enabled: kind !== "flow" || template.mode === "composed",
+      enabled: !["flow", "web_search"].includes(kind) || template.mode === "composed",
     };
   });
 }
@@ -1091,6 +1196,7 @@ function ensureShape(config) {
     language: integration.language || "en",
     speed: Number(integration.speed || 1),
     tts_streaming_mode: integration.tts_streaming_mode || "sentence",
+    provider_id: integration.provider_id || (integration.kind === "web_search" ? "openai-cloud" : ""),
   }));
   shaped.audio_debug_enabled = Boolean(shaped.audio_debug_enabled);
   shaped.audio_debug_keep_sessions = Math.min(
@@ -1143,6 +1249,8 @@ function syncFlow(flow, config = null) {
     voice: "",
   }));
   const hasTools = steps.some((step) => step.kind === "tools" && step.enabled);
+  const hasMemory = steps.some((step) => step.kind === "memory" && step.enabled);
+  const hasWebSearch = steps.some((step) => step.kind === "web_search" && step.enabled);
   return {
     ...flow,
     mode,
@@ -1154,7 +1262,8 @@ function syncFlow(flow, config = null) {
       ? { ...(flow.conversation_flow || clone(defaultFlow.conversation_flow)), enabled: false }
       : flow.conversation_flow,
     mcp_enabled: hasTools,
-    web_search_enabled: Boolean(flow.web_search_enabled),
+    memory_enabled: hasMemory,
+    web_search_enabled: hasWebSearch,
     language: flow.language || "en",
     max_output_tokens: flow.max_output_tokens ? Number(flow.max_output_tokens) : null,
     reasoning_effort: flow.reasoning_effort || null,
@@ -1207,6 +1316,10 @@ function integrationSummary(integration, config = null) {
   if (integration.kind === "home_assistant_mcp") {
     return config ? mcpMode(config).label : "Automatic";
   }
+  if (integration.kind === "web_search") {
+    const provider = config?.integrations?.find((item) => item.id === integration.provider_id);
+    return provider ? `via ${provider.name}` : "provider missing";
+  }
   if (
     [
       "gemini",
@@ -1221,7 +1334,6 @@ function integrationSummary(integration, config = null) {
       "gradium",
       "speechmatics",
       "elevenlabs",
-      "web_search",
     ].includes(integration.kind)
   ) {
     const status = secretStatus(integration, "api_key");
@@ -1507,10 +1619,16 @@ function App() {
 
   function addStep(kind = "llm") {
     const [, label] = stepTypes.find(([id]) => id === kind) || stepTypes[3];
-    const step = makeStep(kind, label, kind === "tools" ? "ha-mcp" : selectedFlow.provider_id);
+    const step = makeStep(
+      kind,
+      label,
+      kind === "tools" ? "ha-mcp" : kind === "web_search" ? "web-search" : selectedFlow.provider_id,
+    );
     updateSelectedFlow((flow) => {
       flow.pipeline_template = "custom";
       flow.steps.push(step);
+      if (kind === "web_search") flow.web_search_enabled = true;
+      if (kind === "memory") flow.memory_enabled = true;
       return flow;
     });
     setSelectedStepId(step.id);
@@ -1525,6 +1643,8 @@ function App() {
       if (removedStep?.kind === "flow") {
         flow.conversation_flow = { ...(flow.conversation_flow || clone(defaultFlow.conversation_flow)), enabled: false };
       }
+      if (removedStep?.kind === "web_search") flow.web_search_enabled = false;
+      if (removedStep?.kind === "memory") flow.memory_enabled = false;
       return flow;
     });
     setSelectedStepId(selectedFlow.steps.find((step) => step.id !== stepId)?.id || "");
@@ -1536,7 +1656,7 @@ function App() {
       return;
     }
     const [, label] = stepTypes.find(([id]) => id === kind) || stepTypes[3];
-    const integrationId = kind === "tools" ? "ha-mcp" : "";
+    const integrationId = kind === "tools" ? "ha-mcp" : kind === "web_search" ? "web-search" : "";
     const step = makeStep(kind, label, integrationId);
     if (kind === "flow") {
       step.enabled = true;
@@ -1552,6 +1672,8 @@ function App() {
           enabled: true,
         };
       }
+      if (kind === "web_search") flow.web_search_enabled = true;
+      if (kind === "memory") flow.memory_enabled = true;
       return flow;
     });
     setSelectedStepId(step.id);
@@ -1586,6 +1708,7 @@ function App() {
       credentials_path: "",
       access_key_id: "",
       secret_key: "",
+      provider_id: kind === "web_search" ? "openai-cloud" : "",
     };
     updateConfig((draft) => {
       draft.integrations.push(integration);
@@ -1717,14 +1840,14 @@ function App() {
         <img src="assets/logo.svg" alt="" />
         {fatalError ? (
           <>
-            <strong>Interface did not load</strong>
+            <strong>{t("Interface did not load")}</strong>
             <span>{fatalError}</span>
             <Button icon={RefreshCw} variant="secondary" onClick={() => load().catch((err) => setFatalError(String(err)))}>
-              Retry
+              {t("Retry")}
             </Button>
           </>
         ) : (
-          <span>Loading</span>
+          <span>{t("Loading")}</span>
         )}
       </main>
     );
@@ -1738,17 +1861,17 @@ function App() {
           <div>
             <h1>Pipecat Assist</h1>
             <span className={activeValidation.ok ? "state ok" : "state error"}>
-              {activeValidation.ok ? "ready" : "setup needed"}
+              {activeValidation.ok ? t("ready") : t("setup needed")}
             </span>
           </div>
         </div>
 
         <nav className="tabs" aria-label="Pipecat Assist">
           {[
-            ["assistant", "Assistant", Bot],
-            ["pipelines", "Pipelines", Workflow],
-            ["integrations", "Integrations", SlidersHorizontal],
-            ["runtime", "Runtime", Settings],
+            ["assistant", t("Assistant"), Bot],
+            ["pipelines", t("Pipelines"), Workflow],
+            ["integrations", t("Integrations"), SlidersHorizontal],
+            ["runtime", t("Runtime"), Settings],
           ].map(([id, label, Icon]) => (
             <button key={id} className={tab === id ? "active" : ""} onClick={() => openTab(id)}>
               <Icon size={17} />
@@ -1756,10 +1879,6 @@ function App() {
             </button>
           ))}
         </nav>
-        <button className="theme-toggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
-          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-          <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
-        </button>
       </aside>
 
       <main className="workspace">
@@ -1767,28 +1886,36 @@ function App() {
           <div>
             <h2>
               {tab === "assistant"
-                ? "Assistant"
+                ? t("Assistant")
                 : tab === "pipelines"
-                  ? "Pipelines"
+                  ? t("Pipelines")
                   : tab === "integrations"
-                    ? "Integrations"
-                    : "Runtime"}
+                    ? t("Integrations")
+                    : t("Runtime")}
             </h2>
             <span>{activeValidation.ok ? `${activeFlow.mode} pipeline` : activeValidation.errors[0]}</span>
           </div>
           <div className="actions">
+            <button
+              className="theme-toggle icon-only"
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              title={theme === "dark" ? t("Light mode") : t("Dark mode")}
+              aria-label={theme === "dark" ? t("Light mode") : t("Dark mode")}
+            >
+              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
             {tab === "pipelines" && pipelineStage !== "list" && (
               <Button
                 icon={ChevronLeft}
                 variant="secondary"
                 onClick={() => setPipelineStage(pipelineStage === "flow" ? "editor" : "list")}
               >
-                {pipelineStage === "flow" ? "Back to pipeline" : "Back to pipelines"}
+                {pipelineStage === "flow" ? t("Back to pipeline") : t("Back to pipelines")}
               </Button>
             )}
             {tab === "integrations" && integrationStage !== "list" && (
               <Button icon={ChevronLeft} variant="secondary" onClick={() => setIntegrationStage("list")}>
-                Back to integrations
+                {t("Back to integrations")}
               </Button>
             )}
           </div>
@@ -1975,13 +2102,22 @@ function validatePipeline(config, flow) {
     const searchIntegration = config.integrations.find((item) => item.id === "web-search" || item.kind === "web_search");
     if (!searchIntegration || !searchIntegration.enabled) {
       errors.push("Web Search integration is disabled.");
-    } else if (secretStatus(searchIntegration, "api_key") === "missing") {
-      errors.push("Web Search API key is missing.");
+    } else {
+      const searchProvider = config.integrations.find((item) => item.id === searchIntegration.provider_id);
+      if (!searchProvider) {
+        errors.push("Web Search needs a cloud LLM provider.");
+      } else if (!webSearchProviderKinds.includes(searchProvider.kind)) {
+        errors.push(`${searchProvider.name} cannot be used for Web Search.`);
+      } else if (!searchProvider.enabled) {
+        errors.push(`${searchProvider.name} is disabled.`);
+      } else if (searchProvider.kind !== "openai_compatible" && secretStatus(searchProvider, "api_key") === "missing") {
+        errors.push(`${searchProvider.name} API key is missing.`);
+      }
     }
   }
 
   for (const step of enabledSteps) {
-    if (!["stt", "llm", "tts", "tools", "output"].includes(step.kind)) continue;
+    if (!["stt", "llm", "web_search", "tts", "tools", "output"].includes(step.kind)) continue;
     if (!step.integration_id) {
       if (step.kind !== "output") errors.push(`${step.label} needs an integration.`);
       continue;
@@ -2037,17 +2173,17 @@ function AssistantView({ config, flow, status, setTab }) {
         <div className="assistant-title">
           <span>{template.group || flow.mode}</span>
           <h3>{flow.name}</h3>
-          <strong>{validation.ok ? "Ready" : validation.errors[0]}</strong>
+          <strong>{validation.ok ? t("Ready") : validation.errors[0]}</strong>
         </div>
         {showGeminiLiveHint && (
           <div className="setup-callout">
             <AlertCircle size={20} />
             <div>
-              <strong>The easiest way to get started is with Gemini Live.</strong>
+              <strong>{t("The easiest way to get started is with Gemini Live.")}</strong>
               <span>
                 Go to{" "}
                 <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noreferrer">
-                  Google AI Studio
+                  {t("Google AI Studio")}
                 </a>{" "}
                 and generate an API key. Then open Integrations and paste it into Google Gemini Live.
               </span>
@@ -2057,7 +2193,7 @@ function AssistantView({ config, flow, status, setTab }) {
         <VoiceTest config={config} flow={flow} />
         <div className="assistant-actions">
           <Button icon={Workflow} variant="secondary" onClick={() => setTab("pipelines")}>
-            Edit active pipeline
+            {t("Edit active pipeline")}
           </Button>
         </div>
       </section>
@@ -2122,7 +2258,7 @@ function PipelineView({
                 event.target.value = "";
               }}
             >
-              <option value="">Add pipeline</option>
+              <option value="">{t("Add pipeline")}</option>
               {templates.map((template) => (
                 <option key={template.id} value={template.id}>
                   {template.label}
@@ -2181,25 +2317,25 @@ function PipelineView({
             {flow.id === activeFlowId ? (
               <span className="active-badge">
                 <CheckCircle2 size={15} />
-                <span>Active</span>
+                <span>{t("Active")}</span>
               </span>
             ) : (
               <Button icon={CheckCircle2} variant="secondary" onClick={() => activateFlow(flow.id)} disabled={saving}>
-                Set active
+                {t("Set active")}
               </Button>
             )}
             <Button icon={Copy} variant="secondary" onClick={duplicateFlow}>
-              Duplicate
+              {t("Duplicate")}
             </Button>
             <Button icon={Trash2} variant="danger" onClick={deleteFlow} disabled={config.flows.length <= 1}>
-              Delete
+              {t("Delete")}
             </Button>
           </div>
         </div>
 
         <div className={validation.ok ? "validation-card ok" : "validation-card error"}>
           {validation.ok ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-          <span>{validation.ok ? "Pipeline is valid." : validation.errors[0]}</span>
+          <span>{validation.ok ? t("Pipeline is valid.") : validation.errors[0]}</span>
         </div>
 
         <StepPalette insertStep={insertStep} flowSupported={flowSupported} />
@@ -2254,7 +2390,7 @@ function PipelineView({
         </div>
         <div className="editor-actions">
           <Button icon={Save} onClick={save} disabled={saving}>
-            Save pipeline
+            {t("Save pipeline")}
           </Button>
         </div>
       </section>
@@ -2277,8 +2413,8 @@ function PipelineView({
         ) : selectedStep ? (
           <>
             <div className="form-grid">
-              {["stt", "llm", "tools", "tts", "output"].includes(selectedStep.kind) && (
-                <Field label="Integration">
+              {["stt", "llm", "web_search", "tools", "tts", "output"].includes(selectedStep.kind) && (
+                <Field label={t("Integration")}>
                   <select
                     value={selectedStep.integration_id || ""}
                     onChange={(event) => {
@@ -2305,7 +2441,7 @@ function PipelineView({
               <Toggle
                 checked={selectedStep.enabled}
                 onChange={(value) => updateStep(selectedStep.id, (step) => ({ ...step, enabled: value }))}
-                label="Step enabled"
+                label={t("Step enabled")}
               />
             </div>
           </>
@@ -2355,26 +2491,51 @@ function PipelineView({
           <>
             <div className="divider" />
             <div className="form-grid">
-              <Field label="Instructions" wide>
+              <Field label={t("Instructions")} wide>
                 <textarea rows={8} value={flow.instructions} onChange={(event) => updateFlow((draft) => ({ ...draft, instructions: event.target.value }))} />
               </Field>
               <Toggle
                 checked={!flow.greeting}
                 onChange={(value) => updateFlow((draft) => ({ ...draft, greeting: value ? "" : defaultFlow.greeting }))}
-                label="No greeting"
+                label={t("No greeting")}
               />
-              <Toggle
-                checked={flow.web_search_enabled}
-                onChange={(value) => updateFlow((draft) => ({ ...draft, web_search_enabled: value }))}
-                label="Expose web search tool"
-              />
-              <Field label="Greeting" wide>
+              <Field label={t("Greeting")} wide>
                 <input
                   value={flow.greeting}
                   disabled={!flow.greeting}
                   onChange={(event) => updateFlow((draft) => ({ ...draft, greeting: event.target.value }))}
                 />
               </Field>
+            </div>
+          </>
+        )}
+
+        {selectedStep?.kind === "memory" && (
+          <>
+            <div className="divider" />
+            <div className="empty-state">
+              Session memory keeps recent turns for this pipeline when the same browser, card, or satellite reconnects. Retention limits are configured in Runtime.
+            </div>
+          </>
+        )}
+
+        {selectedStep?.kind === "web_search" && (
+          <>
+            <div className="divider" />
+            <div className="form-grid">
+              <Toggle
+                checked={selectedStep.settings?.announce !== false}
+                onChange={(value) =>
+                  updateStep(selectedStep.id, (step) => ({
+                    ...step,
+                    settings: { ...(step.settings || {}), announce: value },
+                  }))
+                }
+                label={t("Announce web search")}
+              />
+              <div className="empty-state wide">
+                When enabled, the system prompt asks the assistant to say "Please hold, I'm checking." before it uses web search.
+              </div>
             </div>
           </>
         )}
@@ -3302,10 +3463,10 @@ function IntegrationsView({
         <IntegrationRuntimeDefaults integration={selectedIntegration} updateIntegration={updateIntegration} />
         <div className="editor-actions">
           <Button icon={RotateCcw} variant="secondary" onClick={() => resetIntegrationDefaults(selectedIntegration.id)}>
-            Reset defaults
+            {t("Reset defaults")}
           </Button>
           <Button icon={Save} onClick={save} disabled={saving}>
-            Save integration
+            {t("Save integration")}
           </Button>
         </div>
       </section>
@@ -3325,10 +3486,10 @@ function IntegrationIdentity({ integration, updateIntegration }) {
           <Toggle
             checked={integration.enabled}
             onChange={(value) => updateIntegration(integration.id, (item) => ({ ...item, enabled: value }))}
-            label="Enabled"
+            label={t("Enabled")}
           />
         </div>
-        <Field label="Name">
+        <Field label={t("Name")}>
           <input
             value={integration.name}
             onChange={(event) => updateIntegration(integration.id, (item) => ({ ...item, name: event.target.value }))}
@@ -3349,6 +3510,61 @@ function IntegrationRuntimeDefaults({ integration, updateIntegration }) {
       {showLanguage && <LanguageSetting integration={integration} updateIntegration={updateIntegration} />}
       {showSpeed && <SpeedSetting integration={integration} updateIntegration={updateIntegration} />}
       {showTtsStreaming && <TtsStreamingSetting integration={integration} updateIntegration={updateIntegration} />}
+    </SettingsSection>
+  );
+}
+
+function WebSearchSettings({ integration, config, updateIntegration, modelOptions, loadModelOptions }) {
+  const providers = config.integrations.filter((item) => webSearchProviderKinds.includes(item.kind));
+  const selectedProvider =
+    providers.find((item) => item.id === integration.provider_id) ||
+    providers.find((item) => item.id === "openai-cloud") ||
+    providers[0];
+  const providerKey = selectedProvider ? `${selectedProvider.id}:llm` : "";
+  const options = providerKey ? modelOptions?.[providerKey] || [] : [];
+  const listId = `web-search-models-${integration.id}`;
+
+  return (
+    <SettingsSection title="Web Search" status={selectedProvider ? `via ${selectedProvider.name}` : "provider missing"}>
+      <Field label={t("Cloud LLM provider")}>
+        <select
+          value={selectedProvider?.id || ""}
+          onChange={(event) => {
+            const provider = providers.find((item) => item.id === event.target.value);
+            updateIntegration(integration.id, (item) => ({
+              ...item,
+              provider_id: provider?.id || "",
+              default_model: provider?.default_model || item.default_model || "",
+            }));
+          }}
+        >
+          {!providers.length && <option value="">No compatible provider</option>}
+          {providers.map((provider) => (
+            <option key={provider.id} value={provider.id}>
+              {provider.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label={t("Search model")}>
+        <input
+          autoComplete="off"
+          list={listId}
+          value={integration.default_model || selectedProvider?.default_model || ""}
+          onFocus={() => selectedProvider && loadModelOptions?.(selectedProvider.id, "llm")}
+          onChange={(event) => updateIntegration(integration.id, (item) => ({ ...item, default_model: event.target.value }))}
+        />
+        <datalist id={listId}>
+          {options.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.label}
+            </option>
+          ))}
+        </datalist>
+      </Field>
+      <div className="empty-state wide">
+        OpenAI uses the Responses web search tool. Gemini uses Google Search grounding. Credentials stay in the selected provider integration.
+      </div>
     </SettingsSection>
   );
 }
@@ -3515,12 +3731,7 @@ function IntegrationSettings({ integration, config, updateIntegration, modelOpti
   }
 
   if (integration.kind === "web_search") {
-    return (
-      <SettingsSection title="Web Search" status={secretStatus(integration, "api_key")}>
-        <SecretSetting integration={integration} field="api_key" label="OpenAI API key" updateIntegration={updateIntegration} />
-        <TextSetting integration={integration} field="default_model" label="Search model" updateIntegration={updateIntegration} />
-      </SettingsSection>
-    );
+    return <WebSearchSettings integration={integration} config={config} updateIntegration={updateIntegration} modelOptions={modelOptions} loadModelOptions={loadModelOptions} />;
   }
 
   if (["soniox", "deepgram", "gradium", "speechmatics"].includes(integration.kind)) {
@@ -4052,7 +4263,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
                 about: {
                   library: "pipecat-assist-ui",
-                  library_version: "0.1.28",
+                  library_version: "0.1.29",
                   platform: "browser",
                 },
             },
@@ -4157,12 +4368,12 @@ function VoiceTest({ config, flow }) {
   }
 
   const running = ["requesting", "connecting", "connected"].includes(state);
-  const stateLabel = state === "idle" && !readiness.ok ? "Setup needed" : {
-    connected: "Connected",
-    connecting: "Connecting",
-    error: "Needs attention",
-    idle: "Idle",
-    requesting: "Microphone",
+  const stateLabel = state === "idle" && !readiness.ok ? t("Setup needed") : {
+    connected: t("Connected"),
+    connecting: t("Connecting"),
+    error: t("Needs attention"),
+    idle: t("Idle"),
+    requesting: t("Microphone"),
   }[state];
   const displayDetail = state === "idle" ? readiness.detail : detail;
   const startDisabled = state === "idle" && !readiness.ok;
@@ -4186,7 +4397,7 @@ function VoiceTest({ config, flow }) {
           onClick={running ? () => stopVoiceTest() : startVoiceTest}
           disabled={startDisabled}
         >
-          {running ? "Stop voice test" : "Start voice test"}
+          {running ? t("Stop voice test") : t("Start voice test")}
         </Button>
       </div>
     </div>
@@ -4206,15 +4417,15 @@ function AudioDebugPanel({
     <>
       <div className="panel-head">
         <div>
-          <h3>Audio debug</h3>
+          <h3>{t("Audio debug")}</h3>
           <span>{audioDebug?.enabled ? "enabled" : `${recordings.length} sessions`}</span>
         </div>
         <div className="button-row">
           <Button icon={RefreshCw} variant="secondary" onClick={refreshAudioDebug}>
-            Refresh
+            {t("Refresh")}
           </Button>
           <Button icon={Trash2} variant="danger" onClick={clearAudioDebug} disabled={!recordings.length}>
-            Clear
+            {t("Clear")}
           </Button>
         </div>
       </div>
@@ -4222,7 +4433,7 @@ function AudioDebugPanel({
         <Toggle
           checked={config.audio_debug_enabled}
           onChange={(value) => updateConfig((draft) => ({ ...draft, audio_debug_enabled: value }))}
-          label="Record audio in/out"
+          label={t("Record audio in/out")}
         />
         <Field label="Keep sessions">
           <input
@@ -4292,15 +4503,15 @@ function McpHistoryPanel({ mcpHistory, refreshMcpHistory, clearMcpHistory }) {
     <section className="mcp-history-panel">
       <div className="panel-head">
         <div>
-          <h3>Home Assistant actions</h3>
+          <h3>{t("Home Assistant actions")}</h3>
           <span>{calls.length ? `${calls.length} recent MCP calls` : "no MCP calls yet"}</span>
         </div>
         <div className="button-row">
           <Button icon={RefreshCw} variant="secondary" onClick={refreshMcpHistory}>
-            Refresh
+            {t("Refresh")}
           </Button>
           <Button icon={Trash2} variant="danger" onClick={clearMcpHistory} disabled={!calls.length}>
-            Clear
+            {t("Clear")}
           </Button>
         </div>
       </div>
@@ -4337,9 +4548,9 @@ function RuntimeSettingsPanel({ config, updateConfig }) {
         <Toggle
           checked={config.session_memory_enabled}
           onChange={(value) => updateConfig((draft) => ({ ...draft, session_memory_enabled: value }))}
-          label="Session memory"
+          label={t("Session memory")}
         />
-        <Field label="Memory reuse">
+        <Field label={t("Memory reuse")}>
           <select
             value={String(config.session_memory_reuse_seconds ?? 300)}
             onChange={(event) => updateConfig((draft) => ({ ...draft, session_memory_reuse_seconds: Number(event.target.value) }))}
@@ -4351,7 +4562,7 @@ function RuntimeSettingsPanel({ config, updateConfig }) {
             <option value="3600">1 hour</option>
           </select>
         </Field>
-        <Field label="Memory messages">
+        <Field label={t("Memory messages")}>
           <input
             type="number"
             min="0"
@@ -4363,9 +4574,9 @@ function RuntimeSettingsPanel({ config, updateConfig }) {
         <Toggle
           checked={config.mcp_tools_cache_enabled}
           onChange={(value) => updateConfig((draft) => ({ ...draft, mcp_tools_cache_enabled: value }))}
-          label="MCP tools cache"
+          label={t("MCP tools cache")}
         />
-        <Field label="MCP cache TTL">
+        <Field label={t("MCP cache TTL")}>
           <select
             value={String(config.mcp_tools_cache_ttl_seconds ?? 300)}
             onChange={(event) => updateConfig((draft) => ({ ...draft, mcp_tools_cache_ttl_seconds: Number(event.target.value) }))}
@@ -4407,7 +4618,7 @@ function RuntimeView({
         />
         <div className="editor-actions">
           <Button icon={Save} onClick={save} disabled={saving}>
-            Save runtime
+            {t("Save runtime")}
           </Button>
         </div>
         <div className="divider" />

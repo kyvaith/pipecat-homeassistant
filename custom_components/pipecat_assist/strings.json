@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Pipecat Assist",
-        "description": "Connect Home Assistant Conversation to the Pipecat Assist add-on.",
+        "description": "Connect Home Assistant Assist, STT, and TTS to the Pipecat Assist add-on.",
         "data": {
           "url": "Add-on URL",
           "token": "Bearer token",
@@ -19,4 +19,3 @@
     }
   }
 }
-

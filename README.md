@@ -17,9 +17,9 @@ Assistant MCP server.
   Pipecat ESP32 SmallWebRTC clients, and connects to Home Assistant MCP.
 - `addons/pipecat_assist/ui-src` - the React source for the pipeline editor
   shipped as static assets inside the add-on image.
-- `custom_components/pipecat_assist` - a small Home Assistant conversation
-  entity that forwards text requests into the add-on, so existing HA
-  conversation entry points can select "Pipecat Realtime".
+- `custom_components/pipecat_assist` - a Home Assistant integration that
+  exposes Pipecat Assist as Conversation, STT, and TTS entities, plus a
+  Lovelace WebRTC card asset.
 - `.github/workflows` - CI and GHCR publishing workflows for multi-arch Home
   Assistant images.
 
@@ -29,7 +29,8 @@ Assistant MCP server.
 flowchart LR
     ESP32["Pipecat ESP32 satellite"] -->|"SmallWebRTC /api/offer"| Addon["Pipecat Assist add-on"]
     Browser["HA Ingress UI"] --> Addon
-    HAConv["HA Conversation agent"] -->|"HTTP text bridge"| Addon
+    HAConv["HA Assist bridge"] -->|"Conversation / STT / TTS HTTP bridge"| Addon
+    Lovelace["Lovelace card"] -->|"WebRTC /api/offer"| Addon
     Addon -->|"Pipecat S2S"| Realtime["Gemini Live / OpenAI Realtime / AWS Nova Sonic"]
     Addon -->|"Pipecat composed realtime"| Cascade["STT + LLM + TTS"]
     Cascade --> Flow["Pipecat Flows"]
@@ -49,7 +50,7 @@ flowchart LR
 6. Configure model providers:
    Gemini Live is the default, and additional providers such as OpenAI,
    Soniox, Deepgram, Cartesia, Gradium, Speechmatics, AWS, ElevenLabs, Google
-   Cloud TTS HTTP/Streaming, OpenAI-compatible endpoints, Ollama, local
+   Cloud TTS HTTP fallback/Streaming, OpenAI-compatible endpoints, Ollama, local
    runtimes, and Web Search can be added from **Integrations**.
 7. Choose or create a pipeline. The built-in catalog includes realtime
    speech-to-speech profiles and composed realtime profiles such as
@@ -68,10 +69,10 @@ Gemini Live is the default first-run pipeline. Add a Google AI Studio key in
 **Integrations > Google Gemini Live**, keep
 `models/gemini-3.1-flash-live-preview` as the realtime model, and use
 **Assistant > Start voice test** to verify the browser voice path. The Home
-Assistant conversation bridge is a text-path test; configure Google Gemini
-Cloud or OpenAI Cloud for text/composed runtime tests, install
+Assistant Assist bridge is best-effort compatibility with the classic HA
+Assist path; configure a composed pipeline for STT/TTS, install
 `custom_components/pipecat_assist`, add the **Pipecat Assist** integration, and
-select **Pipecat Realtime** as the conversation agent.
+select **Pipecat Assist** for Conversation, Speech-to-text, and Text-to-speech.
 
 ## Pipelines and Pipecat Flows
 
@@ -87,15 +88,29 @@ Pipecat Assist supports two realtime runtime families:
 
 Provider integrations are intentionally split by capability. OpenAI Realtime
 and Gemini Live are speech-to-speech providers; OpenAI Cloud and Google Gemini
-Cloud are composed/text providers. Web Search is a separate optional tool that
-can be exposed from the LLM step while Home Assistant device control remains on
-MCP.
+Cloud are composed/text providers. Session Memory and Web Search are separate
+pipeline steps. Web Search selects a cloud LLM provider such as OpenAI Cloud or
+Google Gemini Cloud, while Home Assistant device control remains on MCP.
 
 Official `pipecat-ai-flows` support is enabled for composed realtime pipelines.
 The flow editor stores nodes, transition functions, JSON schemas, and optional
 Home Assistant MCP tool calls. For speech-to-speech services, the UI disables
 the Pipecat Flow tile because Pipecat Flows does not currently support Gemini
 Live or OpenAI Realtime S2S APIs.
+
+## Home Assistant Assist and Lovelace
+
+The custom component exposes Pipecat Assist in all three Home Assistant Assist
+slots: Conversation, Speech-to-text, and Text-to-speech. Select the single
+`pipecat-assist` language entry; the actual spoken language and voice remain
+configured in the add-on pipeline and provider integrations. The HA Assist
+bridge is not full-duplex like the Pipecat WebRTC path, but it lets standard HA
+Assist entry points call the active Pipecat pipeline where the provider supports
+the requested bridge operation.
+
+The Lovelace card is served by the integration at
+`/pipecat_assist/pipecat-assist-card.js` and uses the same WebRTC assistant path
+as the add-on demo.
 
 ## Audio debugging
 

@@ -8,13 +8,14 @@ import hmac
 import os
 import time
 from contextlib import suppress
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 from starlette.staticfiles import StaticFiles
 
@@ -82,7 +83,7 @@ from app.mcp_bridge import (
 )
 from app.session_memory import SESSION_MEMORY
 from app.text_agent import run_text_conversation
-from app.web_search_tool import web_search_schema
+from app.web_search_tool import run_gemini_web_search, run_openai_web_search, web_search_schema
 
 STORE = ConfigStore()
 STARTED_AT = time.time()
@@ -356,6 +357,104 @@ async def api_conversation(payload: dict[str, Any]):
     )
 
 
+@app.post("/api/assist/stt")
+async def api_stt(request: Request, flow_id: str | None = None):
+    """Best-effort STT bridge for the classic Home Assistant Assist pipeline."""
+
+    config = STORE.load()
+    flow = config.selected_flow(flow_id)
+    step, integration = _step_integration(config, flow, "stt")
+    integration = _require_integration(integration, "STT", fields=())
+    model = _step_model_for(step, integration, "stt", DEFAULT_OPENAI_STT_MODEL)
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=400, detail="No audio was provided")
+
+    if integration.kind in {"openai", "openai_cloud"}:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=_integration_api_key(integration, "STT", config.openai_api_key))
+        result = await client.audio.transcriptions.create(
+            file=("speech.wav", BytesIO(audio), request.headers.get("content-type") or "audio/wav"),
+            model=model or DEFAULT_OPENAI_STT_MODEL,
+            language=_runtime_language(flow, integration) or None,
+        )
+        return {"text": (getattr(result, "text", "") or "").strip()}
+
+    if integration.kind == "deepgram":
+        headers = {
+            "Authorization": f"Token {_integration_api_key(integration, 'STT')}",
+            "Content-Type": request.headers.get("content-type") or "audio/wav",
+        }
+        params = {"model": model or DEFAULT_DEEPGRAM_MODEL, "smart_format": "true"}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post("https://api.deepgram.com/v1/listen", params=params, headers=headers, content=audio)
+            response.raise_for_status()
+        data = response.json()
+        transcript = (
+            data.get("results", {})
+            .get("channels", [{}])[0]
+            .get("alternatives", [{}])[0]
+            .get("transcript", "")
+        )
+        return {"text": str(transcript).strip()}
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"HA Assist STT bridge does not support {integration.name}. Use a composed pipeline with OpenAI Cloud or Deepgram STT.",
+    )
+
+
+@app.post("/api/assist/tts")
+async def api_tts(payload: dict[str, Any]):
+    """Best-effort TTS bridge for the classic Home Assistant Assist pipeline."""
+
+    config = STORE.load()
+    flow = config.selected_flow(payload.get("flow_id"))
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="No text was provided")
+
+    step, integration = _step_integration(config, flow, "tts")
+    integration = _require_integration(integration, "TTS", fields=())
+    model = _step_model_for(step, integration, "tts", DEFAULT_OPENAI_TTS_MODEL)
+    voice = _step_voice(step, integration, DEFAULT_OPENAI_TTS_VOICE)
+
+    if integration.kind in {"openai", "openai_cloud"}:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=_integration_api_key(integration, "TTS", config.openai_api_key))
+        result = await client.audio.speech.create(
+            model=model or DEFAULT_OPENAI_TTS_MODEL,
+            voice=voice or DEFAULT_OPENAI_TTS_VOICE,
+            input=text,
+            response_format="wav",
+            speed=_runtime_speed(flow, integration),
+        )
+        return Response(content=result.content, media_type="audio/wav", headers={"X-Audio-Extension": "wav"})
+
+    if integration.kind == "elevenlabs":
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice or DEFAULT_ELEVENLABS_VOICE}"
+        headers = {
+            "xi-api-key": _integration_api_key(integration, "TTS"),
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                url,
+                headers=headers,
+                json={"text": text, "model_id": model or DEFAULT_ELEVENLABS_MODEL},
+            )
+            response.raise_for_status()
+        return Response(content=response.content, media_type="audio/mpeg", headers={"X-Audio-Extension": "mp3"})
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"HA Assist TTS bridge does not support {integration.name}. Use a composed pipeline with OpenAI Cloud or ElevenLabs TTS.",
+    )
+
+
 @app.get("/api/assist/debug/audio")
 async def api_audio_debug():
     config = STORE.load()
@@ -508,20 +607,76 @@ def _require_integration(
     return integration
 
 
+def _enabled_web_search_step(flow: FlowConfig):
+    return _enabled_step(flow, "web_search")
+
+
+def _web_search_enabled(flow: FlowConfig) -> bool:
+    return bool(flow.web_search_enabled or _enabled_web_search_step(flow))
+
+
+def _memory_enabled(config: RuntimeConfig, flow: FlowConfig) -> bool:
+    memory_step = _enabled_step(flow, "memory")
+    return config.session_memory_enabled and (flow.memory_enabled or memory_step is not None)
+
+
+def _web_search_announces(flow: FlowConfig) -> bool:
+    step = _enabled_web_search_step(flow)
+    if not step:
+        return False
+    return bool((step.settings or {}).get("announce", True))
+
+
+def _effective_instructions(flow: FlowConfig) -> str:
+    instructions = flow.instructions
+    if _web_search_announces(flow):
+        instructions += (
+            "\n\nWhen you decide to use web search, first say "
+            '"Please hold, I\'m checking." Then run the search and answer briefly.'
+        )
+    return instructions
+
+
 def _web_search_tool_schema(config: RuntimeConfig, flow: FlowConfig) -> FunctionSchema | None:
     """Return the optional web search tool schema for a flow."""
 
-    if not flow.web_search_enabled:
+    if not _web_search_enabled(flow):
         return None
     integration = config.integration("web-search")
     if not integration or not integration.enabled:
         return None
-    api_key = (integration.api_key or config.openai_api_key or "").strip()
-    if not api_key:
-        logger.warning("Web search is enabled, but the Web Search integration has no API key")
+    provider = config.integration(integration.provider_id or "openai-cloud")
+    if not provider:
+        logger.warning("Web search is enabled, but no search LLM provider is selected")
         return None
-    model = integration.default_model or DEFAULT_WEB_SEARCH_MODEL
-    return web_search_schema(api_key, model)
+    model = integration.default_model or provider.default_model or DEFAULT_WEB_SEARCH_MODEL
+
+    if provider.kind in {"openai", "openai_cloud"}:
+        api_key = (provider.api_key or integration.api_key or config.openai_api_key or "").strip()
+        if not api_key:
+            logger.warning("Web search is enabled, but {} has no API key", provider.name)
+            return None
+
+        async def runner(query: str) -> str:
+            return await run_openai_web_search(api_key, model, query)
+
+        return web_search_schema(runner, model)
+
+    if provider.kind in {"gemini", "gemini_cloud"}:
+        if model.startswith(("gpt-", "o", "claude-")):
+            model = provider.default_model or DEFAULT_GEMINI_TEXT_MODEL
+        api_key = (provider.api_key or integration.api_key or os.getenv("GOOGLE_API_KEY", "")).strip()
+        if not api_key:
+            logger.warning("Web search is enabled, but {} has no API key", provider.name)
+            return None
+
+        async def runner(query: str) -> str:
+            return await run_gemini_web_search(api_key, model or DEFAULT_GEMINI_TEXT_MODEL, query)
+
+        return web_search_schema(runner, model or DEFAULT_GEMINI_TEXT_MODEL)
+
+    logger.warning("Web search provider {} is not supported yet", provider.kind)
+    return None
 
 
 def _merge_tools_schema(
@@ -760,7 +915,7 @@ def _gemini_live_service(
 
     settings_kwargs: dict[str, Any] = {
         "model": _gemini_model(model),
-        "system_instruction": flow.instructions,
+        "system_instruction": _effective_instructions(flow),
         "voice": _gemini_voice(flow, integration),
         "language": _runtime_language(flow, integration) or "en-US",
     }
@@ -787,7 +942,7 @@ def _openai_realtime_service(
         api_key=api_key,
         settings=OpenAIRealtimeLLMService.Settings(
             model=model,
-            system_instruction=flow.instructions,
+            system_instruction=_effective_instructions(flow),
             session_properties=_session_properties(
                 flow,
                 tools_schema,
@@ -816,7 +971,7 @@ def _aws_nova_sonic_service(
         settings=AWSNovaSonicLLMService.Settings(
             model=model or DEFAULT_AWS_NOVA_SONIC_MODEL,
             voice=flow.voice or integration.default_voice or DEFAULT_AWS_NOVA_SONIC_VOICE,
-            system_instruction=flow.instructions,
+            system_instruction=_effective_instructions(flow),
         ),
         tools=tools,
     )
@@ -877,7 +1032,7 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
             raise RuntimeError("OpenAI is missing api_key")
         settings_kwargs: dict[str, Any] = {
             "model": model or DEFAULT_OPENAI_TEXT_MODEL,
-            "system_instruction": flow.instructions,
+            "system_instruction": _effective_instructions(flow),
         }
         if flow.max_output_tokens:
             settings_kwargs["max_tokens"] = flow.max_output_tokens
@@ -897,7 +1052,7 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
             api_key=api_key,
             settings=GoogleLLMService.Settings(
                 model=model or integration.default_model or DEFAULT_GEMINI_TEXT_MODEL,
-                system_instruction=flow.instructions,
+                system_instruction=_effective_instructions(flow),
                 max_tokens=flow.max_output_tokens or 4096,
             ),
         )
@@ -907,7 +1062,7 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
         _require_integration(integration, "AWS Bedrock", fields=("access_key_id", "secret_key"))
         settings_kwargs: dict[str, Any] = {
             "model": model or integration.default_model,
-            "system_instruction": flow.instructions,
+            "system_instruction": _effective_instructions(flow),
         }
         if flow.max_output_tokens:
             settings_kwargs["max_tokens"] = flow.max_output_tokens
@@ -923,7 +1078,7 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
 
         settings_kwargs: dict[str, Any] = {
             "model": model or integration.default_model,
-            "system_instruction": flow.instructions,
+            "system_instruction": _effective_instructions(flow),
         }
         if flow.max_output_tokens:
             settings_kwargs["max_tokens"] = flow.max_output_tokens
@@ -939,7 +1094,7 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
             base_url=integration.base_url or "http://localhost:11434/v1",
             settings=OLLamaLLMService.Settings(
                 model=model or integration.default_model or "llama3.2",
-                system_instruction=flow.instructions,
+                system_instruction=_effective_instructions(flow),
             ),
         )
 
@@ -1107,7 +1262,7 @@ def _flow_node_configs(flow: FlowConfig, bridge: HomeAssistantMCPBridge | None):
 
         config_node: dict[str, Any] = {
             "name": node_id,
-            "role_message": _messages_text(data.get("role_messages"), str(data.get("role_message") or flow.instructions)),
+            "role_message": _messages_text(data.get("role_messages"), str(data.get("role_message") or _effective_instructions(flow))),
             "task_messages": data.get("task_messages") if isinstance(data.get("task_messages"), list) else [
                 {
                     "role": "developer",
@@ -1260,7 +1415,7 @@ async def run_bot(
         context_messages = SESSION_MEMORY.restore(
             client_id,
             greeting_messages,
-            enabled=config.session_memory_enabled,
+            enabled=_memory_enabled(config, flow),
             reuse_seconds=config.session_memory_reuse_seconds,
             max_messages=config.session_memory_max_messages,
         )
@@ -1342,13 +1497,13 @@ async def run_bot(
 
         initial_flow_node = None
         active_tools_schema = None if _flow_enabled(flow) else tools_schema
-        context_messages = [{"role": "developer", "content": flow.instructions}]
+        context_messages = [{"role": "developer", "content": _effective_instructions(flow)}]
         if flow.greeting.strip():
             context_messages.append({"role": "developer", "content": flow.greeting})
         context_messages = SESSION_MEMORY.restore(
             client_id,
             context_messages,
-            enabled=config.session_memory_enabled,
+            enabled=_memory_enabled(config, flow),
             reuse_seconds=config.session_memory_reuse_seconds,
             max_messages=config.session_memory_max_messages,
         )
@@ -1435,7 +1590,7 @@ async def run_bot(
             SESSION_MEMORY.cache(
                 client_id,
                 context_for_memory,
-                enabled=config.session_memory_enabled,
+                enabled=_memory_enabled(config, flow),
                 max_messages=config.session_memory_max_messages,
             )
         if bridge:

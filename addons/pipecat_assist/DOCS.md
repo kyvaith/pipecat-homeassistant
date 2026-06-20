@@ -40,8 +40,10 @@ MCP. The default Flow remains pass-through until enabled.
 `Integrations`
 : Configure cloud providers and local AI endpoints, including Gemini, OpenAI,
 Soniox, Deepgram, Cartesia, Gradium, Speechmatics, AWS, ElevenLabs, Google
-Cloud TTS HTTP, Google Cloud TTS Streaming, Azure/OpenAI-compatible APIs,
-Ollama, local runtimes, Web Search, and Home Assistant MCP. Home Assistant MCP
+Cloud TTS HTTP fallback, Google Cloud TTS Streaming, Azure/OpenAI-compatible
+APIs, Ollama, local runtimes, Web Search, and Home Assistant MCP. Google Cloud
+TTS HTTP is labeled as a fallback because it does not provide the same
+streaming latency profile as Google Cloud TTS Streaming. Home Assistant MCP
 shows Automatic, Manual, or Error state and contains the MCP test/reset
 controls.
 
@@ -82,17 +84,19 @@ Open **Runtime > Home Assistant actions** to inspect the recent MCP tools called
 by the assistant. The history is in-memory, capped to recent calls, and intended
 for debugging what the assistant attempted to do in Home Assistant.
 
-### Session memory and web search
+### Session Memory and Web Search pipeline steps
 
-Short-lived session memory is enabled by default. It keeps the last few
-messages for a browser or satellite client for a limited time, so reconnecting
-does not immediately lose the conversational context. It is in-memory only and
-is cleared when the add-on restarts.
+Short-lived Session Memory is enabled by default and appears as a pipeline
+step. It keeps the last few messages for a browser or satellite client for a
+limited time, so reconnecting does not immediately lose the conversational
+context. It is in-memory only and is cleared when the add-on restarts.
 
-Web Search is a separate integration. Add an OpenAI API key in
-**Integrations > Web Search**, then enable **Expose web search tool** on the
-pipeline's LLM step. The model can then call a hosted OpenAI Responses API web
-search tool for current public information. Home Assistant device control still
+Web Search is also a pipeline step. Configure **Integrations > Web Search**,
+select a cloud LLM provider such as **OpenAI Cloud** or **Google Gemini Cloud**,
+then add or enable the Web Search step in a composed pipeline. OpenAI uses the
+Responses web search tool. Gemini uses Google Search grounding. Enable
+**Announce web search** on the step if the assistant should say "Please hold,
+I'm checking." before using a search tool. Home Assistant device control still
 uses MCP tools.
 
 ### Composed realtime latency
@@ -123,9 +127,9 @@ handled through MCP tools.
 6. Keep the default instructions or adapt them to the household.
 7. Save the pipeline.
 
-For Home Assistant Assist text tests, configure **Google Gemini Cloud** or
-**OpenAI Cloud** as the composed/text provider. Gemini Live itself is a
-speech-to-speech runtime.
+For Home Assistant Assist bridge tests, configure a composed pipeline with a
+supported STT and TTS provider. Gemini Live itself is a speech-to-speech
+runtime.
 
 ### Browser voice test
 
@@ -141,10 +145,13 @@ from a trusted local origin. If WebRTC connects but the assistant hears the
 wrong text, use **Runtime > Record audio in/out** and inspect the captured WAV
 files.
 
-### Home Assistant Assist text test
+### Home Assistant Assist bridge
 
-This verifies the custom conversation entity, selected pipeline, and MCP tools.
-It is not a streaming Gemini Live audio test.
+This verifies the custom Home Assistant entities, selected pipeline, and MCP
+tools. It is not a full-duplex Gemini Live audio test; HA Assist still uses the
+classic STT -> Conversation -> TTS path. For the lowest latency voice
+experience, use the add-on Assistant page, Pipecat ESP32, or the Lovelace
+WebRTC card.
 
 1. Copy or install `custom_components/pipecat_assist` into Home Assistant.
 2. Restart Home Assistant if the integration is not already available.
@@ -152,16 +159,45 @@ It is not a streaming Gemini Live audio test.
 4. Set the add-on URL to `http://127.0.0.1:7860`, or use the Home Assistant LAN
    URL if Core cannot reach loopback.
 5. Leave the bearer token empty unless you add your own endpoint protection.
-6. In **Settings > Voice assistants**, select **Pipecat Realtime** as the
-   conversation agent.
-7. Type a Home Assistant request in Assist and check the add-on logs for MCP
-   tool calls and model errors.
+6. In **Settings > Voice assistants**, select **Pipecat Assist** for
+   Conversation, Speech-to-text, and Text-to-speech. Use the only available
+   Pipecat Assist language entry; the real language and voice are configured in
+   the add-on.
+7. Use a composed pipeline for this bridge. STT currently supports OpenAI Cloud
+   and Deepgram. TTS currently supports OpenAI Cloud and ElevenLabs.
+8. Type or speak a Home Assistant request in Assist and check the add-on logs
+   for MCP tool calls and model errors.
+
+### Lovelace WebRTC card
+
+The custom component serves a dashboard card with the same WebRTC assistant
+test path used by the add-on UI.
+
+1. Add this dashboard resource:
+
+```yaml
+url: /pipecat_assist/pipecat-assist-card.js
+type: module
+```
+
+2. Add a manual card:
+
+```yaml
+type: custom:pipecat-assist-card
+name: Pipecat Assist
+url: /api/hassio_ingress/<your-add-on-ingress-token>
+# flow_id: optional-flow-id
+```
+
+Use the add-on's Ingress API base URL or a direct add-on URL that can reach
+`/api/assist/config` and `/api/offer`. The card uses the active pipeline unless
+`flow_id` is provided.
 
 ### Gemini troubleshooting
 
 - `Missing module: google.genai`: the add-on image is too old.
 - `model not found`: check Gemini Live access in Google AI Studio and the
-  realtime model value in **Integrations > Google Gemini**.
+  realtime model value in **Integrations > Google Gemini Live**.
 - MCP or `401`: open **Integrations > Home Assistant MCP**, select
   **Automatic defaults**, restart the add-on, then select **Test MCP**.
 - Voice `marin` does not work with Gemini: set the Gemini voice to `Charon` or
@@ -182,9 +218,10 @@ same model, instructions, greeting, MCP tools, and Pipecat Flow settings apply
 to browser tests and satellites. The direct ESP32 authentication path will move
 to the standard Home Assistant token flow as the ESPHome integration work lands.
 
-## Home Assistant Conversation entity
+## Home Assistant integration
 
 Copy or install `custom_components/pipecat_assist` from this repository, then
 add the integration in Home Assistant. Set the add-on URL to
 `http://127.0.0.1:7860` or the Home Assistant LAN URL if the integration cannot
-reach loopback in your installation.
+reach loopback in your installation. The integration provides Conversation,
+STT, TTS, and the Lovelace card asset.

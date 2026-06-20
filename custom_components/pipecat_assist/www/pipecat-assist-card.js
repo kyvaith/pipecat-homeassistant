@@ -1,0 +1,273 @@
+class PipecatAssistCard extends HTMLElement {
+  setConfig(config) {
+    this.config = config || {};
+    this.attachShadow({ mode: "open" });
+    this.state = "idle";
+    this.detail = "Ready";
+    this.render();
+  }
+
+  set hass(value) {
+    this._hass = value;
+  }
+
+  getCardSize() {
+    return 3;
+  }
+
+  baseUrl() {
+    return (this.config.url || "").replace(/\/$/, "");
+  }
+
+  apiUrl(path) {
+    const base = this.baseUrl();
+    if (!base) return path;
+    return `${base}/${path.replace(/^\//, "")}`;
+  }
+
+  async loadAddonConfig() {
+    const response = await fetch(this.apiUrl("/api/assist/config"));
+    if (!response.ok) throw new Error(`Config failed with HTTP ${response.status}`);
+    return response.json();
+  }
+
+  async waitForIce(peerConnection, timeoutMs = 2500) {
+    if (peerConnection.iceGatheringState === "complete") return;
+    await new Promise((resolve) => {
+      let timer;
+      const done = () => {
+        clearTimeout(timer);
+        peerConnection.removeEventListener("icegatheringstatechange", onChange);
+        resolve();
+      };
+      const onChange = () => {
+        if (peerConnection.iceGatheringState === "complete") done();
+      };
+      timer = setTimeout(done, timeoutMs);
+      peerConnection.addEventListener("icegatheringstatechange", onChange);
+    });
+  }
+
+  clientId() {
+    const key = "pipecat-assist-lovelace-client-id";
+    const existing = localStorage.getItem(key);
+    if (existing) return existing;
+    const created = crypto.randomUUID();
+    localStorage.setItem(key, created);
+    return created;
+  }
+
+  stop() {
+    this.channel?.readyState === "open" && this.channel.send(JSON.stringify({
+      label: "rtvi-ai",
+      id: crypto.randomUUID().slice(0, 8),
+      type: "disconnect-bot",
+      data: {},
+    }));
+    this.channel?.close();
+    this.channel = undefined;
+    this.peer?.close();
+    this.peer = undefined;
+    this.stream?.getTracks().forEach((track) => track.stop());
+    this.stream = undefined;
+    if (this.audio) this.audio.srcObject = null;
+    this.state = "idle";
+    this.detail = "Stopped";
+    this.render();
+  }
+
+  fail(message) {
+    this.stop();
+    this.state = "error";
+    this.detail = message;
+    this.render();
+  }
+
+  async start() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.fail("Microphone access is not available from this browser context.");
+      return;
+    }
+
+    try {
+      this.state = "requesting";
+      this.detail = "Waiting for microphone permission";
+      this.render();
+      const addonConfig = await this.loadAddonConfig();
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true },
+        video: false,
+      });
+
+      const peer = new RTCPeerConnection();
+      this.peer = peer;
+      const track = this.stream.getAudioTracks()[0];
+      if (track) peer.addTransceiver(track, { direction: "sendrecv" });
+      else peer.addTransceiver("audio", { direction: "sendrecv" });
+
+      this.channel = peer.createDataChannel("signalling");
+      this.channel.onopen = () => {
+        this.channel.send(JSON.stringify({
+          label: "rtvi-ai",
+          id: crypto.randomUUID().slice(0, 8),
+          type: "client-ready",
+          data: {
+            version: "1.4.0",
+            about: { library: "pipecat-assist-lovelace-card", platform: "home-assistant" },
+          },
+        }));
+      };
+
+      peer.ontrack = (event) => {
+        if (event.track.kind !== "audio") return;
+        this.audio.srcObject = event.streams[0] || new MediaStream([event.track]);
+        this.audio.play().catch(() => {});
+      };
+      peer.onconnectionstatechange = () => {
+        if (peer.connectionState === "connected") {
+          this.state = "connected";
+          this.detail = "Connected. Speak to Pipecat Assist.";
+          this.render();
+        }
+        if (["failed", "disconnected"].includes(peer.connectionState)) {
+          this.fail(`WebRTC ${peer.connectionState}`);
+        }
+      };
+
+      this.state = "connecting";
+      this.detail = "Creating WebRTC offer";
+      this.render();
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      await this.waitForIce(peer);
+
+      const offerPath = addonConfig.runner_offer_path || "api/offer";
+      const response = await fetch(this.apiUrl(offerPath), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sdp: peer.localDescription.sdp,
+          type: peer.localDescription.type,
+          request_data: {
+            flow_id: this.config.flow_id || addonConfig.selected_flow_id,
+            source: "lovelace_card",
+            client_id: this.clientId(),
+          },
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const answer = await response.json();
+      await peer.setRemoteDescription({ sdp: answer.sdp, type: answer.type });
+      this.detail = "Connecting audio";
+      this.render();
+    } catch (err) {
+      const name = err?.name || "";
+      const message = name === "NotAllowedError"
+        ? "Microphone access is blocked. Allow microphone access and retry."
+        : err?.message || String(err);
+      this.fail(message);
+    }
+  }
+
+  render() {
+    if (!this.shadowRoot) return;
+    const running = ["requesting", "connecting", "connected"].includes(this.state);
+    this.shadowRoot.innerHTML = `
+      <style>
+        ha-card {
+          display: block;
+          padding: 18px;
+          overflow: hidden;
+        }
+        .wrap {
+          display: grid;
+          gap: 14px;
+        }
+        .head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+        }
+        h3 {
+          margin: 0;
+          font-size: 18px;
+          line-height: 1.2;
+        }
+        .status {
+          display: grid;
+          gap: 4px;
+          color: var(--secondary-text-color);
+          font-size: 13px;
+        }
+        .bars {
+          display: grid;
+          grid-template-columns: repeat(7, 1fr);
+          align-items: end;
+          height: 54px;
+          gap: 5px;
+          padding: 12px;
+          border-radius: 10px;
+          background: var(--secondary-background-color);
+        }
+        .bars span {
+          display: block;
+          height: 18px;
+          border-radius: 999px;
+          background: var(--primary-color);
+          opacity: 0.45;
+          animation: ${running ? "pulse 900ms ease-in-out infinite" : "none"};
+          animation-delay: var(--delay);
+        }
+        @keyframes pulse {
+          0%, 100% { height: 14px; opacity: 0.35; }
+          50% { height: 42px; opacity: 0.95; }
+        }
+        button {
+          min-height: 40px;
+          border: 0;
+          border-radius: 8px;
+          padding: 0 14px;
+          color: var(--text-primary-color, white);
+          background: ${running ? "var(--error-color)" : "var(--primary-color)"};
+          font: inherit;
+          font-weight: 700;
+          cursor: pointer;
+          transition: transform 140ms ease, filter 140ms ease;
+        }
+        button:hover { transform: translateY(-1px); filter: brightness(1.03); }
+        button:active { transform: scale(0.98); }
+        audio { display: none; }
+      </style>
+      <ha-card>
+        <div class="wrap">
+          <div class="head">
+            <div>
+              <h3>${this.config.name || "Pipecat Assist"}</h3>
+              <div class="status">
+                <strong>${this.state === "idle" ? "Ready" : this.state}</strong>
+                <span>${this.detail}</span>
+              </div>
+            </div>
+            <button>${running ? "Stop" : "Talk"}</button>
+          </div>
+          <div class="bars" aria-hidden="true">
+            ${[0, 1, 2, 3, 4, 5, 6].map((item) => `<span style="--delay:${item * 90}ms"></span>`).join("")}
+          </div>
+          <audio autoplay playsinline></audio>
+        </div>
+      </ha-card>
+    `;
+    this.audio = this.shadowRoot.querySelector("audio");
+    this.shadowRoot.querySelector("button").onclick = () => running ? this.stop() : this.start();
+  }
+}
+
+customElements.define("pipecat-assist-card", PipecatAssistCard);
+
+window.customCards = window.customCards || [];
+window.customCards.push({
+  type: "pipecat-assist-card",
+  name: "Pipecat Assist",
+  description: "Realtime Pipecat Assist voice card.",
+});

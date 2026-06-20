@@ -1,12 +1,12 @@
 {
   "domain": "pipecat_assist",
   "name": "Pipecat Assist",
+  "version": "0.1.29",
   "codeowners": ["@kyvaith"],
   "config_flow": true,
-  "dependencies": ["conversation"],
+  "dependencies": ["conversation", "stt", "tts"],
   "documentation": "https://github.com/kyvaith/pipecat-homeassistant",
   "integration_type": "service",
   "iot_class": "local_push",
   "requirements": []
 }
-

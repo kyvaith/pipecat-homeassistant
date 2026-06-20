@@ -17,7 +17,7 @@ also includes composed realtime profiles such as `Soniox + OpenAI + Cartesia`,
 `Deepgram + Gemini + Google TTS Streaming`, and `Speechmatics + AWS Nova Pro +
 ElevenLabs`. Provider settings are configured in **Integrations**: realtime
 providers, cloud STT/LLM/TTS providers, Web Search, and Home Assistant MCP are
-kept separate. Official Pipecat Flows can be enabled inside composed realtime
-pipelines.
+kept separate. Session Memory and Web Search are visible pipeline steps, and
+official Pipecat Flows can be enabled inside composed realtime pipelines.
 
 For setup, testing, and troubleshooting, see `DOCS.md`.
