@@ -109,8 +109,8 @@ Assist entry points call the active Pipecat pipeline where the provider supports
 the requested bridge operation.
 
 The Lovelace card is served by the integration at
-`/pipecat_assist/pipecat-assist-card.js` and uses the same WebRTC assistant path
-as the add-on demo.
+`/pipecat_assist/pipecat-assist-card.js`, is loaded automatically by the custom
+component, and uses the same WebRTC assistant path as the add-on demo.
 
 ## Audio debugging
 

@@ -170,17 +170,8 @@ WebRTC card.
 
 ### Lovelace WebRTC card
 
-The custom component serves a dashboard card with the same WebRTC assistant
-test path used by the add-on UI.
-
-1. Add this dashboard resource:
-
-```yaml
-url: /pipecat_assist/pipecat-assist-card.js
-type: module
-```
-
-2. Add a manual card:
+The custom component automatically loads the dashboard card module when the
+Pipecat Assist integration is installed. Add a manual card:
 
 ```yaml
 type: custom:pipecat-assist-card

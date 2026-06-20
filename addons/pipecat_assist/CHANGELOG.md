@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.30
+
+- Automatically load the Lovelace card module when the Pipecat Assist custom
+  component is installed, so users no longer need to add a dashboard resource
+  manually.
+
 ## 0.1.29
 
 - Added visible pipeline steps for Session Memory and Web Search, including a

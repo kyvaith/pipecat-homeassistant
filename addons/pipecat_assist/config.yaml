@@ -1,5 +1,5 @@
 name: Pipecat Assist
-version: "0.1.29"
+version: "0.1.30"
 slug: pipecat_assist
 description: Realtime Pipecat assistant for Home Assistant with MCP device control and ESP32 satellite support.
 url: https://github.com/kyvaith/pipecat-homeassistant

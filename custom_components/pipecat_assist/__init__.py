@@ -9,12 +9,14 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
 PLATFORMS = [Platform.CONVERSATION, Platform.STT, Platform.TTS]
+CARD_MODULE_URL = "/pipecat_assist/pipecat-assist-card.js"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Pipecat Assist from a config entry."""
 
     await _async_register_static_path(hass)
+    _async_register_frontend_module(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -22,7 +24,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Pipecat Assist."""
 
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        _async_unregister_frontend_module(hass)
+    return unloaded
+
+
+def _async_register_frontend_module(hass: HomeAssistant) -> None:
+    """Load the Lovelace card module automatically with the HA frontend."""
+
+    from homeassistant.components import frontend
+
+    frontend.add_extra_js_url(hass, CARD_MODULE_URL)
+
+
+def _async_unregister_frontend_module(hass: HomeAssistant) -> None:
+    """Unload the Lovelace card module when the integration is unloaded."""
+
+    from homeassistant.components import frontend
+
+    frontend.remove_extra_js_url(hass, CARD_MODULE_URL)
 
 
 async def _async_register_static_path(hass: HomeAssistant) -> None:
