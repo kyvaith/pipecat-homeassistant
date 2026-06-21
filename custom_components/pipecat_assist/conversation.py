@@ -72,6 +72,7 @@ class PipecatAssistConversationEntity(conversation.ConversationEntity):
             "flow_id": self._entry.data.get(CONF_FLOW_ID) or None,
         }
         response = intent.IntentResponse(language=user_input.language)
+        had_error = False
 
         try:
             async with asyncio.timeout(75):
@@ -82,11 +83,13 @@ class PipecatAssistConversationEntity(conversation.ConversationEntity):
                 ) as http_response:
                     data = await _response_payload(http_response)
                     if http_response.status >= 400:
+                        had_error = True
                         response.async_set_error(
                             intent.IntentResponseErrorCode.UNKNOWN,
                             data.get("detail", "Pipecat Assist returned an error."),
                         )
                     elif data.get("error"):
+                        had_error = True
                         response.async_set_error(
                             intent.IntentResponseErrorCode.UNKNOWN,
                             data.get("speech", data["error"]),
@@ -94,6 +97,7 @@ class PipecatAssistConversationEntity(conversation.ConversationEntity):
                     else:
                         response.async_set_speech(data.get("speech", ""))
         except (TimeoutError, aiohttp.ClientError) as err:
+            had_error = True
             response.async_set_error(
                 intent.IntentResponseErrorCode.UNKNOWN,
                 f"Pipecat Assist is not reachable: {err}",
@@ -103,5 +107,5 @@ class PipecatAssistConversationEntity(conversation.ConversationEntity):
         return conversation.ConversationResult(
             response=response,
             conversation_id=data.get("conversation_id") or user_input.conversation_id,
-            continue_conversation=bool(data.get("continue_conversation", False)),
+            continue_conversation=not had_error,
         )

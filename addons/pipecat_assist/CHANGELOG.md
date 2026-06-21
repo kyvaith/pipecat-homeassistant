@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.48
+
+- Home Assistant Assist conversation responses now keep
+  `continue_conversation=true` for successful turns across all Pipecat Assist
+  conversation bridge paths, so the HA frontend can resume listening after TTS
+  playback ends.
+- The custom component now keeps continuous conversation enabled for successful
+  add-on responses and disables it only when the add-on returns an error.
+
 ## 0.1.47
 
 - Reduced Home Assistant Assist latency for Gemini Live bridge turns by

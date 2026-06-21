@@ -730,6 +730,7 @@ async def api_conversation(payload: dict[str, Any]):
             logger.warning("HA Assist Gemini Live conversation cache failed: {}", err)
             live_result = None
         if live_result:
+            live_result["continue_conversation"] = True
             logger.info(
                 "HA Assist conversation served from Gemini Live flow={} input={} speech={} total_ms={:.0f}",
                 flow.id,
@@ -748,6 +749,7 @@ async def api_conversation(payload: dict[str, Any]):
             flow_id=flow.id,
             mcp_token=config.effective_mcp_token,
         )
+        result["continue_conversation"] = not bool(result.get("error"))
         if not result.get("error"):
             _start_tts_prefetch(
                 config=config,
