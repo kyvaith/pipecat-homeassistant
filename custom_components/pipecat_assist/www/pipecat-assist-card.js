@@ -1,4 +1,5 @@
-const PIPECAT_ASSIST_CARD_VERSION = "0.1.52";
+const PIPECAT_ASSIST_CARD_VERSION = "0.1.53";
+const HA_ASSIST_SAMPLE_RATE_FALLBACK = 48000;
 const OPUS_AUDIO_QUALITY_PARAMS = {
   minptime: "20",
   useinbandfec: "1",
@@ -7,6 +8,45 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
+
+function rememberAudioSampleRate(value) {
+  const sampleRate = Number(value || 0);
+  if (sampleRate > 0) window.__pipecatAssistLastSampleRate = sampleRate;
+}
+
+function haAssistSampleRateFallback() {
+  const remembered = Number(window.__pipecatAssistLastSampleRate || 0);
+  return remembered > 0 ? remembered : HA_ASSIST_SAMPLE_RATE_FALLBACK;
+}
+
+function installHaAssistSampleRateGuard() {
+  if (window.__pipecatAssistSampleRateGuardInstalled || !window.WebSocket?.prototype?.send) return;
+  window.__pipecatAssistSampleRateGuardInstalled = true;
+  const originalSend = window.WebSocket.prototype.send;
+  window.WebSocket.prototype.send = function pipecatAssistSend(data) {
+    if (typeof data !== "string" || !data.includes("assist_pipeline/run")) {
+      return originalSend.call(this, data);
+    }
+    try {
+      const payload = JSON.parse(data);
+      const input = payload?.input;
+      if (
+        payload?.type === "assist_pipeline/run"
+        && payload?.start_stage === "stt"
+        && input
+        && Number(input.sample_rate || 0) <= 0
+      ) {
+        input.sample_rate = haAssistSampleRateFallback();
+        data = JSON.stringify(payload);
+      }
+    } catch {
+      // Leave non-JSON websocket payloads untouched.
+    }
+    return originalSend.call(this, data);
+  };
+}
+
+installHaAssistSampleRateGuard();
 
 function mergeOpusFmtp(existing) {
   const params = new Map();
@@ -48,8 +88,24 @@ function preferFullbandOpus(sdp) {
 }
 
 class PipecatAssistCard extends HTMLElement {
+  constructor() {
+    super();
+    this.stopOnPageExit = () => this.stop();
+  }
+
   static getStubConfig() {
     return { name: "Pipecat Assist" };
+  }
+
+  connectedCallback() {
+    window.addEventListener("pagehide", this.stopOnPageExit);
+    window.addEventListener("beforeunload", this.stopOnPageExit);
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener("pagehide", this.stopOnPageExit);
+    window.removeEventListener("beforeunload", this.stopOnPageExit);
+    this.stop();
   }
 
   setConfig(config) {
@@ -220,6 +276,7 @@ class PipecatAssistCard extends HTMLElement {
       const peer = new RTCPeerConnection();
       this.peer = peer;
       const track = this.stream.getAudioTracks()[0];
+      rememberAudioSampleRate(track?.getSettings?.().sampleRate);
       if (track) peer.addTransceiver(track, { direction: "sendrecv" });
       else peer.addTransceiver("audio", { direction: "sendrecv" });
 

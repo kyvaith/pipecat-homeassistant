@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.53
+
+- Added a Home Assistant frontend compatibility guard that fills a missing
+  `assist_pipeline/run` STT sample rate when the web Assist dialog sends
+  `sample_rate: null`, preventing the Core validation error before Pipecat
+  Assist STT is called.
+- The Lovelace card now tears down active WebRTC audio on page unload or when
+  the card is removed from the dashboard DOM, reducing the chance that a stale
+  microphone session interferes with Home Assistant Assist in the same browser.
+
 ## 0.1.52
 
 - Stabilized mobile Lovelace audio by switching the WebRTC Opus offer back to
