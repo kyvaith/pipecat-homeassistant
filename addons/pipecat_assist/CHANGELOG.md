@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.51
+
+- Tuned Lovelace card and add-on voice test WebRTC offers for fuller Opus
+  playback by advertising fullband/high-bitrate Opus parameters.
+- Added a background Home Assistant Assist warmup after add-on startup and
+  configuration saves to pre-cache MCP tools and pre-open the Gemini Live setup
+  path before the first Assist turn.
+
 ## 0.1.50
 
 - Fixed composed WebRTC sessions with Speechmatics STT by passing the active

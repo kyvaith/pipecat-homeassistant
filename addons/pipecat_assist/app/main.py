@@ -120,6 +120,7 @@ HA_LIVE_TRANSCRIPT_TIMEOUT_SECONDS = 30
 HA_LIVE_RESULT_TIMEOUT_SECONDS = 75
 HA_LIVE_TURNS_BY_TRANSCRIPT: dict[tuple[str, str], "HALiveTurn"] = {}
 HA_LIVE_TURNS_BY_SPEECH: dict[tuple[str, str], "HALiveTurn"] = {}
+HA_ASSIST_WARMUP_TASK: asyncio.Task | None = None
 
 
 @dataclass
@@ -551,6 +552,7 @@ async def api_get_config(request: Request):
 @app.put("/api/assist/config")
 async def api_update_config(payload: dict[str, Any], request: Request):
     config = STORE.update_from_public(payload)
+    _schedule_ha_assist_warmup(config, reason="config_update")
     data = config.public_dict()
     data["runner_offer_url"] = _offer_url(config, request)
     data["runner_offer_path"] = _offer_path(config)
@@ -1750,6 +1752,136 @@ def _gemini_live_ha_setup(
     if tools_schema and tools_schema.standard_tools:
         setup["tools"] = [_gemini_live_tool_declarations(tools_schema)]
     return setup
+
+
+async def _warm_mcp_tools_schema(
+    config: RuntimeConfig,
+    flow: FlowConfig,
+) -> ToolsSchema | None:
+    if not flow.mcp_enabled or not config.effective_mcp_token:
+        return None
+    bridge = HomeAssistantMCPBridge(
+        config.effective_mcp_url,
+        config.effective_mcp_token,
+        flow.mcp_tool_allowlist,
+    )
+    try:
+        await bridge.start()
+        tools = await bridge.tools_schema(
+            cache_enabled=config.mcp_tools_cache_enabled,
+            cache_ttl_seconds=config.mcp_tools_cache_ttl_seconds,
+            refresh=False,
+        )
+        logger.info(
+            "HA Assist warmup cached MCP schema flow={} tools={}",
+            flow.id,
+            len(tools.standard_tools),
+        )
+        return tools if tools.standard_tools else None
+    finally:
+        with suppress(Exception):
+            await bridge.close()
+
+
+async def _warm_gemini_live_ha_setup(
+    config: RuntimeConfig,
+    flow: FlowConfig,
+    integration: IntegrationConfig,
+    tools_schema: ToolsSchema | None,
+) -> None:
+    api_key = _integration_api_key(
+        integration,
+        "Gemini Live HA Assist warmup",
+        os.getenv("GOOGLE_API_KEY", ""),
+    )
+    url = (
+        "wss://generativelanguage.googleapis.com/ws/"
+        "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        f"?key={quote(api_key, safe='')}"
+    )
+    started_at = time.perf_counter()
+    async with _websocket_connect(url, {}) as provider_ws:
+        await provider_ws.send(
+            json.dumps({"setup": _gemini_live_ha_setup(config, flow, integration, tools_schema)})
+        )
+        async with asyncio.timeout(10):
+            while True:
+                raw = await provider_ws.recv()
+                message = json.loads(raw)
+                if message.get("setupComplete") is not None:
+                    break
+                if message.get("error"):
+                    raise RuntimeError(_gemini_live_error_message(message))
+    logger.info(
+        "HA Assist warmup completed Gemini Live setup flow={} model={} duration_ms={:.0f}",
+        flow.id,
+        _model_name(flow, integration, "gemini"),
+        (time.perf_counter() - started_at) * 1000,
+    )
+
+
+async def _warm_ha_assist_flow(config: RuntimeConfig, flow: FlowConfig, reason: str) -> None:
+    started_at = time.perf_counter()
+    try:
+        mcp_tools_schema = None
+        try:
+            mcp_tools_schema = await _warm_mcp_tools_schema(config, flow)
+        except Exception as err:
+            logger.debug("HA Assist MCP warmup skipped/failed for flow {}: {}", flow.id, err)
+        local_tool_schemas = [schema for schema in [_web_search_tool_schema(config, flow)] if schema]
+        tools_schema = _merge_tools_schema(mcp_tools_schema, local_tool_schemas)
+        integration = _ha_live_bridge_integration(
+            config,
+            flow,
+            {
+                "codec": "pcm",
+                "sample_rate": DEFAULT_HA_STT_SAMPLE_RATE,
+                "bit_rate": DEFAULT_HA_STT_SAMPLE_WIDTH * 8,
+                "channel": DEFAULT_HA_STT_CHANNELS,
+            },
+        )
+        if integration:
+            await _warm_gemini_live_ha_setup(config, flow, integration, tools_schema)
+        logger.info(
+            "HA Assist warmup finished flow={} reason={} duration_ms={:.0f}",
+            flow.id,
+            reason,
+            (time.perf_counter() - started_at) * 1000,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception as err:
+        logger.debug("HA Assist warmup skipped/failed for flow {}: {}", flow.id, err)
+
+
+def _schedule_ha_assist_warmup(
+    config: RuntimeConfig | None = None,
+    *,
+    reason: str = "startup",
+) -> None:
+    global HA_ASSIST_WARMUP_TASK
+    try:
+        config = config or STORE.load()
+        flow = config.selected_flow(None)
+    except Exception as err:
+        logger.debug("HA Assist warmup could not load configuration: {}", err)
+        return
+
+    if HA_ASSIST_WARMUP_TASK and not HA_ASSIST_WARMUP_TASK.done():
+        HA_ASSIST_WARMUP_TASK.cancel()
+    HA_ASSIST_WARMUP_TASK = asyncio.create_task(_warm_ha_assist_flow(config, flow, reason))
+
+    def _log_result(task: asyncio.Task) -> None:
+        with suppress(asyncio.CancelledError):
+            if err := task.exception():
+                logger.debug("HA Assist warmup task failed: {}", err)
+
+    HA_ASSIST_WARMUP_TASK.add_done_callback(_log_result)
+
+
+@app.on_event("startup")
+async def _startup_warm_ha_assist() -> None:
+    _schedule_ha_assist_warmup(reason="startup")
 
 
 def _gemini_live_tool_declarations(tools_schema: ToolsSchema) -> dict[str, Any]:

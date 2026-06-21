@@ -128,6 +128,58 @@ function appUrl(path) {
   return new URL(path, documentBaseUrl()).href;
 }
 
+const OPUS_AUDIO_QUALITY_PARAMS = [
+  "minptime=10",
+  "useinbandfec=1",
+  "stereo=1",
+  "sprop-stereo=1",
+  "maxplaybackrate=48000",
+  "maxaveragebitrate=510000",
+  "usedtx=0",
+];
+
+function mergeOpusFmtp(existing) {
+  const parts = existing
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const keys = new Set(parts.map((part) => part.split("=", 1)[0].toLowerCase()));
+  for (const param of OPUS_AUDIO_QUALITY_PARAMS) {
+    const key = param.split("=", 1)[0].toLowerCase();
+    if (!keys.has(key)) parts.push(param);
+  }
+  return parts.join(";");
+}
+
+function preferFullbandOpus(sdp) {
+  if (!sdp) return sdp;
+  const separator = sdp.includes("\r\n") ? "\r\n" : "\n";
+  const lines = sdp.split(/\r?\n/);
+  const opusPayloads = new Set();
+  const fmtpPayloads = new Set();
+
+  for (const line of lines) {
+    const rtpmap = /^a=rtpmap:(\d+)\s+opus\/48000(?:\/2)?/i.exec(line);
+    if (rtpmap) opusPayloads.add(rtpmap[1]);
+    const fmtp = /^a=fmtp:(\d+)\s+/i.exec(line);
+    if (fmtp) fmtpPayloads.add(fmtp[1]);
+  }
+
+  return lines
+    .map((line) => {
+      const fmtp = /^a=fmtp:(\d+)\s*(.*)$/i.exec(line);
+      if (fmtp && opusPayloads.has(fmtp[1])) {
+        return `a=fmtp:${fmtp[1]} ${mergeOpusFmtp(fmtp[2] || "")}`;
+      }
+      const rtpmap = /^a=rtpmap:(\d+)\s+opus\/48000(?:\/2)?/i.exec(line);
+      if (rtpmap && !fmtpPayloads.has(rtpmap[1])) {
+        return `${line}${separator}a=fmtp:${rtpmap[1]} ${mergeOpusFmtp("")}`;
+      }
+      return line;
+    })
+    .join(separator);
+}
+
 const API = {
   config: appUrl("api/assist/config"),
   status: appUrl("api/assist/status"),
@@ -4263,7 +4315,7 @@ function VoiceTest({ config, flow }) {
               version: "1.4.0",
                 about: {
                   library: "pipecat-assist-ui",
-                  library_version: "0.1.50",
+                  library_version: "0.1.51",
                   platform: "browser",
                 },
             },
@@ -4324,8 +4376,8 @@ function VoiceTest({ config, flow }) {
 
       setState("connecting");
       setDetail("Creating WebRTC offer");
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
+      const offer = await peerConnection.createOffer({ voiceActivityDetection: false });
+      await peerConnection.setLocalDescription({ type: offer.type, sdp: preferFullbandOpus(offer.sdp) });
       await waitForIceGatheringComplete(peerConnection);
 
       const response = await fetch(offerPath(config), {
