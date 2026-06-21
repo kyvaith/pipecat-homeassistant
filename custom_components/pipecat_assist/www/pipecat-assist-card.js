@@ -145,7 +145,7 @@ class PipecatAssistCard extends HTMLElement {
             version: "1.4.0",
             about: {
               library: "pipecat-assist-lovelace-card",
-              library_version: "0.1.42",
+              library_version: "0.1.43",
               platform: "home-assistant",
             },
           },

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import hmac
 import json
 import os
@@ -645,6 +646,7 @@ async def api_reset_integration(integration_id: str, request: Request):
 
 @app.post("/api/assist/conversation")
 async def api_conversation(payload: dict[str, Any]):
+    started_at = time.perf_counter()
     text = str(payload.get("text", "")).strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
@@ -666,6 +668,14 @@ async def api_conversation(payload: dict[str, Any]):
                 text=str(result.get("speech") or ""),
                 language=payload.get("language"),
             )
+        logger.info(
+            "HA Assist conversation served flow={} input={} speech={} error={} total_ms={:.0f}",
+            flow.id,
+            _text_fingerprint(text),
+            _text_fingerprint(str(result.get("speech") or "")),
+            result.get("error") or "",
+            (time.perf_counter() - started_at) * 1000,
+        )
         return result
 
     return await _provider_call("HA Assist conversation", request, attempts=1)
@@ -900,6 +910,12 @@ def _tts_prefetch_key(flow_id: str, text: str, response_format: str) -> tuple[st
     return (flow_id, response_format, text.strip())
 
 
+def _text_fingerprint(text: str) -> str:
+    clean = text.strip()
+    digest = hashlib.sha1(clean.encode("utf-8")).hexdigest()[:10]
+    return f"len={len(clean)} sha1={digest}"
+
+
 def _prune_tts_prefetch() -> None:
     now = time.time()
     stale = [
@@ -909,6 +925,25 @@ def _prune_tts_prefetch() -> None:
     ]
     for key in stale:
         TTS_PREFETCH.pop(key, None)
+
+
+def _pop_tts_prefetch(
+    flow_id: str,
+    text: str,
+    response_format: str,
+) -> tuple[str, float, Any] | None:
+    exact_key = _tts_prefetch_key(flow_id, text, response_format)
+    cached = TTS_PREFETCH.pop(exact_key, None)
+    if cached:
+        return "exact", cached[0], cached[1]
+
+    clean = text.strip()
+    for key in list(TTS_PREFETCH):
+        cached_flow_id, _, cached_text = key
+        if cached_flow_id == flow_id and cached_text == clean:
+            created_at, task = TTS_PREFETCH.pop(key)
+            return "format-fallback", created_at, task
+    return None
 
 
 async def _synthesize_tts_audio(
@@ -1000,9 +1035,24 @@ def _start_tts_prefetch(
         return
 
     async def runner() -> tuple[bytes, str, str]:
-        return await _synthesize_tts_audio(config=config, flow=flow, text=text, payload=payload)
+        started_at = time.perf_counter()
+        try:
+            return await _synthesize_tts_audio(config=config, flow=flow, text=text, payload=payload)
+        finally:
+            logger.info(
+                "HA Assist TTS prefetch finished flow={} text={} duration_ms={:.0f}",
+                flow.id,
+                _text_fingerprint(text),
+                (time.perf_counter() - started_at) * 1000,
+            )
 
     task = asyncio.create_task(runner())
+    logger.info(
+        "HA Assist TTS prefetch started flow={} text={} format={}",
+        flow.id,
+        _text_fingerprint(text),
+        "mp3",
+    )
     task.add_done_callback(lambda item: item.exception() if not item.cancelled() else None)
     TTS_PREFETCH[key] = (time.time(), task)
 
@@ -1062,6 +1112,7 @@ async def _synthesize_gemini_tts_audio(
 async def api_tts(payload: dict[str, Any]):
     """Best-effort TTS bridge for the classic Home Assistant Assist pipeline."""
 
+    started_at = time.perf_counter()
     config = STORE.load()
     flow = config.selected_flow(payload.get("flow_id"))
     text = str(payload.get("text") or "").strip()
@@ -1069,15 +1120,19 @@ async def api_tts(payload: dict[str, Any]):
         raise HTTPException(status_code=400, detail="No text was provided")
 
     response_format = _preferred_tts_format(payload)
-    key = _tts_prefetch_key(flow.id, text, response_format)
     _prune_tts_prefetch()
-    cached = TTS_PREFETCH.pop(key, None)
+    cached = _pop_tts_prefetch(flow.id, text, response_format)
+    cache_status = "miss"
+    prefetch_age_ms = 0.0
+    wait_started_at = time.perf_counter()
     if cached:
-        _, task = cached
+        cache_status, created_at, task = cached
+        prefetch_age_ms = max(0.0, (time.time() - created_at) * 1000)
         try:
             audio, media_type, extension = await task
         except Exception as err:
             logger.debug("Prefetched TTS failed; synthesizing on demand: {}", err)
+            cache_status = f"{cache_status}-failed"
             audio, media_type, extension = await _synthesize_tts_audio(
                 config=config,
                 flow=flow,
@@ -1091,6 +1146,18 @@ async def api_tts(payload: dict[str, Any]):
             text=text,
             payload=payload,
         )
+    logger.info(
+        "HA Assist TTS served flow={} text={} cache={} prefetch_age_ms={:.0f} requested_format={} output={} bytes={} wait_ms={:.0f} total_ms={:.0f}",
+        flow.id,
+        _text_fingerprint(text),
+        cache_status,
+        prefetch_age_ms,
+        response_format,
+        extension,
+        len(audio),
+        (time.perf_counter() - wait_started_at) * 1000,
+        (time.perf_counter() - started_at) * 1000,
+    )
     return Response(content=audio, media_type=media_type, headers={"X-Audio-Extension": extension})
 
 

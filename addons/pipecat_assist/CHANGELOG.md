@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.43
+
+- Reuse HA Assist TTS prefetches even when Home Assistant requests a different
+  preferred audio format than the prefetch task used.
+- Add timing logs for HA Assist Conversation and TTS so add-on logs show cache
+  hits, prefetch age, TTS wait time, and total request time.
+
 ## 0.1.42
 
 - Updated the default Gemini TTS model to `gemini-3.1-flash-tts-preview`
