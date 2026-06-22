@@ -14,7 +14,7 @@ env:
   REGISTRY_PREFIX: ghcr.io/${{ github.repository }}
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   id-token: write
 
@@ -110,3 +110,25 @@ jobs:
           image-name: ${{ env.IMAGE_NAME }}
           image-tags: ${{ steps.release.outputs.image_tags }}
           registry-prefix: ${{ env.REGISTRY_PREFIX }}
+
+  github-release:
+    name: Publish GitHub release
+    needs:
+      - manifest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release edit "${TAG_NAME}" --latest
+          else
+            gh release create "${TAG_NAME}" \
+              --title "${TAG_NAME}" \
+              --generate-notes \
+              --latest
+          fi
