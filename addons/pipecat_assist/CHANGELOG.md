@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.66
+
+- Smooth Lovelace transcript scrolling so new lines no longer reanimate the
+  whole transcript.
+- Add English and Polish Lovelace card labels based on the Home Assistant UI
+  language, including the Polish greeting.
+- Keep only the wave visualizer, move it back to the bottom of the card, make
+  Connected the green state, and clear transcripts when a conversation stops.
+
 ## 0.1.65
 
 - Replace the Lovelace card transcript renderer with a streaming message model

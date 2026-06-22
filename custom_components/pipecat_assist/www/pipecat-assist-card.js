@@ -1,4 +1,4 @@
-const PIPECAT_ASSIST_CARD_VERSION = "0.1.65";
+const PIPECAT_ASSIST_CARD_VERSION = "0.1.66";
 const DEFAULT_ACCENT_HEX = "#206cff";
 const DEFAULT_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -25,6 +25,44 @@ const END_CONVERSATION_PHRASES = [
   "we are done",
   "goodbye",
 ];
+const CARD_TRANSLATIONS = {
+  en: {
+    ready: "Ready",
+    connecting: "Connecting",
+    connected: "Connected",
+    error: "Error",
+    greeting: "What would you like to do today?",
+    talk: "Talk",
+    stop: "Stop",
+    enableAudio: "Enable audio",
+    audioBlocked: "Audio is connected, but the browser blocked playback.",
+    waitingForMicrophone: "Waiting for microphone permission",
+    microphoneUnavailable: "Microphone access is not available from this browser context.",
+    microphoneBlocked: "Microphone access is blocked. Allow microphone access and retry.",
+    connectedDetail: "Connected. Speak to Pipecat Assist.",
+    connectingAudio: "Connecting audio",
+  },
+  pl: {
+    ready: "Gotowy",
+    connecting: "Łączenie",
+    connected: "Połączono",
+    error: "Błąd",
+    greeting: "Co chciałbyś dzisiaj zrobić?",
+    talk: "Mów",
+    stop: "Zatrzymaj",
+    enableAudio: "Włącz dźwięk",
+    audioBlocked: "Dźwięk jest połączony, ale przeglądarka zablokowała odtwarzanie.",
+    waitingForMicrophone: "Oczekiwanie na zgodę użycia mikrofonu",
+    microphoneUnavailable: "Dostęp do mikrofonu nie jest dostępny w tej przeglądarce.",
+    microphoneBlocked: "Dostęp do mikrofonu jest zablokowany. Zezwól na mikrofon i spróbuj ponownie.",
+    connectedDetail: "Połączono. Powiedz coś do Pipecat Assist.",
+    connectingAudio: "Łączenie audio",
+  },
+};
+
+function languageBase(value) {
+  return String(value || "").toLowerCase().split(/[-_]/)[0] || "en";
+}
 
 function escapeHtml(value) {
   return String(value || "")
@@ -389,7 +427,7 @@ class PipecatAssistCard extends HTMLElement {
     this.config = config || {};
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this.state = "idle";
-    this.detail = "Ready";
+    this.detail = this.t("ready");
     this.remoteStream = undefined;
     this.audioBlocked = false;
     this.localSpeechEnding = false;
@@ -415,6 +453,7 @@ class PipecatAssistCard extends HTMLElement {
     this.vScrollPos = 0;
     this.vScrollSpeed = 0;
     this.vScrollLastTs = 0;
+    this.vScrollTarget = 0;
     this.ttsEstimatedDuration = 0;
     this.assistantTurnBase = "";
     this.assistantTurnText = "";
@@ -431,7 +470,10 @@ class PipecatAssistCard extends HTMLElement {
   }
 
   set hass(value) {
+    const previousLanguage = this.uiLanguage();
     this._hass = value;
+    const nextLanguage = this.uiLanguage();
+    if (previousLanguage !== nextLanguage && this.shadowRoot) this.render();
   }
 
   getCardSize() {
@@ -444,6 +486,20 @@ class PipecatAssistCard extends HTMLElement {
 
   animationOnIdle() {
     return this.config.animation_on_idle !== false;
+  }
+
+  uiLanguage() {
+    return languageBase(
+      this._hass?.language
+        || this._hass?.locale?.language
+        || this.config?.language
+        || navigator.language,
+    );
+  }
+
+  t(key) {
+    const language = this.uiLanguage();
+    return CARD_TRANSLATIONS[language]?.[key] || CARD_TRANSLATIONS.en[key] || key;
   }
 
   accentHex() {
@@ -463,12 +519,12 @@ class PipecatAssistCard extends HTMLElement {
 
   statusLabel() {
     return {
-      connected: "Connected",
-      connecting: "Connecting",
-      error: "Error",
-      idle: "Ready",
-      requesting: "Connecting",
-    }[this.state] || this.state || "Ready";
+      connected: this.t("connected"),
+      connecting: this.t("connecting"),
+      error: this.t("error"),
+      idle: this.t("ready"),
+      requesting: this.t("connecting"),
+    }[this.state] || this.state || this.t("ready");
   }
 
   statusDetail(label = this.statusLabel()) {
@@ -499,12 +555,33 @@ class PipecatAssistCard extends HTMLElement {
     this.vScrollPos = 0;
     this.vScrollSpeed = 0;
     this.vScrollLastTs = 0;
+    this.vScrollTarget = 0;
     if (this.streamRafId) {
       cancelAnimationFrame(this.streamRafId);
       this.streamRafId = null;
     }
     this.stopTranscriptScroll();
     this.syncTranscriptDom();
+  }
+
+  clearTranscriptData() {
+    this.userTranscript = "";
+    this.assistantTranscript = "";
+    this.partialTranscript = "";
+    this.currentUserText = "";
+    this.currentUserUpdatedAt = 0;
+    this.assistantTurnBase = "";
+    this.assistantTurnText = "";
+    this.assistantTurnPriority = 0;
+    this.assistantTurnActive = false;
+    this.assistantLastTurnText = "";
+    this.assistantLastTurnPriority = 0;
+    this.assistantLastTurnFinishedAt = 0;
+    this.lastAssistantTextAt = 0;
+    this.lastUserTextAt = 0;
+    this.botSpeaking = false;
+    this.ignoreLocalSpeechUntil = 0;
+    this.resetTranscriptState();
   }
 
   chatMessageById(id) {
@@ -525,7 +602,7 @@ class PipecatAssistCard extends HTMLElement {
 
   appendChatMessage(type, text) {
     const id = `m${++this.chatMessageSeq}`;
-    this.chatMessages.push({ id, type, text: normalizeTranscriptText(text) });
+    this.chatMessages.push({ id, type, text: normalizeTranscriptText(text), entered: false });
     while (this.chatMessages.length > 12) {
       const removed = this.chatMessages.shift();
       if (removed?.id === this.currentUserMessageId) this.currentUserMessageId = "";
@@ -563,7 +640,7 @@ class PipecatAssistCard extends HTMLElement {
       if (!placeholder) {
         const empty = document.createElement("div");
         empty.className = "transcript-placeholder";
-        empty.textContent = "Ready when you are.";
+        empty.textContent = this.t("greeting");
         container.appendChild(empty);
       }
       this.scrollTranscriptToEnd();
@@ -582,13 +659,21 @@ class PipecatAssistCard extends HTMLElement {
       let element = existing.get(message.id);
       if (!element) {
         element = document.createElement("div");
-        element.className = `transcript-msg ${message.type}`;
+        const isNew = !message.entered;
+        element.className = `transcript-msg ${message.type}${isNew ? " new-message" : ""}`;
         element.dataset.chatId = message.id;
         const text = document.createElement("span");
         text.className = "transcript-text";
         element.appendChild(text);
+        if (isNew) {
+          message.entered = true;
+          requestAnimationFrame(() => {
+            element.className = element.className.replace(/\s*new-message\b/g, "");
+          });
+        }
+      } else {
+        element.className = `transcript-msg ${message.type}`;
       }
-      element.className = `transcript-msg ${message.type}`;
       const textEl = element.querySelector(".transcript-text");
       if (textEl && message.id !== this.streamFadeMessageId) textEl.textContent = message.text;
       container.appendChild(element);
@@ -701,17 +786,15 @@ class PipecatAssistCard extends HTMLElement {
     if (!el) return;
     const max = el.scrollHeight - el.clientHeight;
     if (max <= 0) return;
-    if (this.botSpeaking || this.assistantTurnActive || this.ttsEstimatedDuration > 0) {
-      this.startTranscriptScroll();
-      return;
-    }
-    el.scrollTop = max;
+    this.vScrollTarget = max;
+    this.startTranscriptScroll();
   }
 
   startTranscriptScroll() {
     if (this.vScrollRaf) return;
     const el = this.transcriptContainer();
     if (el) this.vScrollPos = el.scrollTop;
+    this.vScrollTarget = Math.max(this.vScrollTarget || 0, el ? el.scrollHeight - el.clientHeight : 0);
     this.vScrollLastTs = 0;
     this.vScrollRaf = requestAnimationFrame((timestamp) => this.transcriptScrollTick(timestamp));
   }
@@ -722,6 +805,7 @@ class PipecatAssistCard extends HTMLElement {
       this.vScrollRaf = null;
     }
     this.vScrollLastTs = 0;
+    this.vScrollSpeed = 0;
   }
 
   transcriptScrollTick(timestamp) {
@@ -738,16 +822,19 @@ class PipecatAssistCard extends HTMLElement {
     if (!this.vScrollLastTs) this.vScrollLastTs = timestamp;
     const deltaMs = timestamp - this.vScrollLastTs;
     this.vScrollLastTs = timestamp;
-    const remainingPx = Math.max(0, max - this.vScrollPos);
-    const targetSpeed = Math.max(18, Math.min(220, remainingPx / Math.max(0.3, this.ttsEstimatedDuration || 1.2)));
-    this.vScrollSpeed = this.vScrollSpeed ? this.vScrollSpeed + ((targetSpeed - this.vScrollSpeed) * 0.12) : targetSpeed;
-    this.vScrollPos = Math.min(max, this.vScrollPos + (this.vScrollSpeed * deltaMs / 1000));
-    el.scrollTop = this.vScrollPos;
-    if (this.vScrollPos >= max - 0.5) {
-      el.scrollTop = max;
+    const target = Math.min(max, Math.max(this.vScrollTarget || 0, max));
+    const distance = target - this.vScrollPos;
+    const absDistance = Math.abs(distance);
+    if (absDistance <= 0.5) {
+      el.scrollTop = target;
       this.stopTranscriptScroll();
       return;
     }
+    const easing = Math.max(0.08, Math.min(0.32, deltaMs / 160));
+    const minStep = Math.min(absDistance, Math.max(0.7, deltaMs * 0.06));
+    const step = Math.sign(distance) * Math.max(minStep, absDistance * easing);
+    this.vScrollPos = Math.min(max, Math.max(0, this.vScrollPos + step));
+    el.scrollTop = this.vScrollPos;
     this.vScrollRaf = requestAnimationFrame((nextTimestamp) => this.transcriptScrollTick(nextTimestamp));
   }
 
@@ -986,7 +1073,7 @@ class PipecatAssistCard extends HTMLElement {
         for (let x = 0; x <= width; x += Math.max(2, width / 120)) {
           const progress = x / width;
           const envelope = Math.sin(progress * Math.PI);
-          const y = height * 0.45
+          const y = height * 0.62
             + Math.sin(progress * Math.PI * 4.6 + time * 2.2 + offset) * amplitude * envelope
             + Math.sin(progress * Math.PI * 9.2 - time * 1.4 - offset) * amplitude * 0.28 * envelope;
           if (x === 0) ctx.moveTo(x, y);
@@ -1002,18 +1089,6 @@ class PipecatAssistCard extends HTMLElement {
       drawWave("rgba(255, 255, 255, ALPHA)", 0, 10 * dpr + energy * 34 * dpr, 1.35, 0.52 + energy * 0.42);
       drawWave(`rgba(${Math.min(255, accent.r + 61)}, ${Math.min(255, accent.g + 61)}, 255, ALPHA)`, 1.7, 16 * dpr + energy * 46 * dpr, 1.1, 0.42 + energy * 0.32);
       drawWave(`rgba(${accent.r}, ${accent.g}, ${accent.b}, ALPHA)`, 3.1, 20 * dpr + energy * 58 * dpr, 0.9, 0.28 + energy * 0.28);
-
-      ctx.shadowBlur = 0;
-      const barCount = 34;
-      for (let index = 0; index < barCount; index += 1) {
-        const progress = index / Math.max(1, barCount - 1);
-        const envelope = Math.sin(progress * Math.PI);
-        const pulse = 0.5 + 0.5 * Math.sin(time * 3.4 + index * 0.72);
-        const barHeight = (4 + pulse * 20 * energy) * dpr * envelope;
-        const x = progress * width;
-        ctx.fillStyle = `rgba(${Math.min(255, accent.r + 128)}, ${Math.min(255, accent.g + 103)}, 255, ${0.08 + energy * 0.26})`;
-        ctx.fillRect(x, horizon - barHeight, Math.max(1, 2 * dpr), barHeight);
-      }
     }
     this.visualizerFrame = requestAnimationFrame(() => this.drawVisualizer());
   }
@@ -1174,8 +1249,9 @@ class PipecatAssistCard extends HTMLElement {
     this.remoteStream = undefined;
     this.audioBlocked = false;
     this.lastStoppedAt = Date.now();
+    this.clearTranscriptData();
     this.state = "idle";
-    this.detail = "Stopped";
+    this.detail = this.t("ready");
     this.render();
   }
 
@@ -1188,30 +1264,14 @@ class PipecatAssistCard extends HTMLElement {
 
   async start() {
     if (!navigator.mediaDevices?.getUserMedia) {
-      this.fail("Microphone access is not available from this browser context.");
+      this.fail(this.t("microphoneUnavailable"));
       return;
     }
 
     try {
       this.state = "requesting";
-      this.detail = "Waiting for microphone permission";
-      this.userTranscript = "";
-      this.assistantTranscript = "";
-      this.partialTranscript = "";
-      this.currentUserText = "";
-      this.currentUserUpdatedAt = 0;
-      this.resetTranscriptState();
-      this.assistantTurnBase = "";
-      this.assistantTurnText = "";
-      this.assistantTurnPriority = 0;
-      this.assistantTurnActive = false;
-      this.assistantLastTurnText = "";
-      this.assistantLastTurnPriority = 0;
-      this.assistantLastTurnFinishedAt = 0;
-      this.lastAssistantTextAt = 0;
-      this.lastUserTextAt = 0;
-      this.botSpeaking = false;
-      this.ignoreLocalSpeechUntil = 0;
+      this.detail = this.t("waitingForMicrophone");
+      this.clearTranscriptData();
       this.cancelLocalSpeechResume();
       this.render();
       this.resetAudioElement();
@@ -1260,11 +1320,11 @@ class PipecatAssistCard extends HTMLElement {
         this.attachAudio();
       };
       peer.onconnectionstatechange = () => {
-        if (peer.connectionState === "connected") {
-          this.state = "connected";
-          this.detail = "Connected. Speak to Pipecat Assist.";
-          this.render();
-        }
+          if (peer.connectionState === "connected") {
+            this.state = "connected";
+            this.detail = this.t("connectedDetail");
+            this.render();
+          }
         if (["failed", "disconnected"].includes(peer.connectionState)) {
           this.fail(`WebRTC ${peer.connectionState}`);
         }
@@ -1299,13 +1359,13 @@ class PipecatAssistCard extends HTMLElement {
       const answer = await response.json();
       await peer.setRemoteDescription({ sdp: answer.sdp, type: answer.type });
       this.applyRemoteAudioBuffers(peer);
-      this.detail = "Connecting audio";
+      this.detail = this.t("connectingAudio");
       this.render();
       this.attachAudio();
     } catch (err) {
       const name = err?.name || "";
       const message = name === "NotAllowedError"
-        ? "Microphone access is blocked. Allow microphone access and retry."
+        ? this.t("microphoneBlocked")
         : err?.message || String(err);
       this.fail(message);
     }
@@ -1534,7 +1594,7 @@ class PipecatAssistCard extends HTMLElement {
       playPromise.catch((err) => {
         if (err?.name !== "NotAllowedError" || this.audioBlocked) return;
         this.audioBlocked = true;
-        this.detail = "Audio is connected, but the browser blocked playback.";
+        this.detail = this.t("audioBlocked");
         this.render();
       });
     }
@@ -1553,7 +1613,7 @@ class PipecatAssistCard extends HTMLElement {
     const transcriptHtml = compact ? "" : `
           <div class="transcript-layer" aria-live="polite">
             <div class="transcript-flow">
-              <div class="transcript-placeholder">Ready when you are.</div>
+              <div class="transcript-placeholder">${escapeHtml(this.t("greeting"))}</div>
             </div>
           </div>`;
     this.shadowRoot.innerHTML = `
@@ -1637,13 +1697,16 @@ class PipecatAssistCard extends HTMLElement {
           box-shadow: 0 0 22px rgba(${accentRgb}, 0.18);
         }
         .status-pill.ready {
+          color: rgba(232, 242, 255, 0.92);
+          background: rgba(255, 255, 255, 0.12);
+          border-color: rgba(255, 255, 255, 0.24);
+          box-shadow: none;
+        }
+        .status-pill.connected {
           color: #caffdf;
           background: rgba(34, 197, 94, 0.18);
           border-color: rgba(34, 197, 94, 0.48);
           box-shadow: 0 0 18px rgba(34, 197, 94, 0.18);
-        }
-        .status-pill.connected {
-          color: #e7f2ff;
         }
         .status-pill.connecting::after {
           content: "...";
@@ -1688,7 +1751,7 @@ class PipecatAssistCard extends HTMLElement {
           align-items: flex-start;
           padding: 10px 4px 30px 0;
           box-sizing: border-box;
-          scroll-behavior: smooth;
+          scroll-behavior: auto;
           scrollbar-width: none;
         }
         .transcript-flow::-webkit-scrollbar { display: none; }
@@ -1702,8 +1765,7 @@ class PipecatAssistCard extends HTMLElement {
         }
         .transcript-msg {
           max-width: 92%;
-          opacity: 0;
-          animation: transcript-fade-in 0.3s ease forwards;
+          opacity: 1;
           word-wrap: break-word;
           white-space: pre-line;
           background: none;
@@ -1713,6 +1775,10 @@ class PipecatAssistCard extends HTMLElement {
           border-radius: 0;
           text-shadow: 0 1px 18px rgba(0, 0, 0, 0.45);
           overflow-wrap: anywhere;
+        }
+        .transcript-msg.new-message {
+          opacity: 0;
+          animation: transcript-fade-in 0.28s ease forwards;
         }
         .transcript-msg.user {
           color: rgba(226, 239, 255, 0.56);
@@ -1735,13 +1801,14 @@ class PipecatAssistCard extends HTMLElement {
           100% { opacity: 1; transform: translateY(0); }
         }
         .visualizer-shell {
-          position: relative;
-          min-height: 0;
-          height: 100%;
-          min-height: 238px;
-          margin: 0 -24px;
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          height: 190px;
+          min-height: 190px;
+          margin: 0;
           overflow: hidden;
-          align-self: end;
           -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 30px, #000 100%);
           mask-image: linear-gradient(180deg, transparent 0, #000 30px, #000 100%);
         }
@@ -1749,9 +1816,9 @@ class PipecatAssistCard extends HTMLElement {
           content: "";
           position: absolute;
           left: 50%;
-          bottom: -106px;
+          bottom: -98px;
           width: 118%;
-          height: 208px;
+          height: 190px;
           transform: translateX(-50%);
           border-radius: 50% 50% 0 0;
           border-top: 1px solid rgba(168, 209, 255, 0.58);
@@ -1772,7 +1839,7 @@ class PipecatAssistCard extends HTMLElement {
           display: block;
           width: 100%;
           height: 100%;
-          min-height: 238px;
+          min-height: 190px;
           position: relative;
           z-index: 1;
         }
@@ -1815,8 +1882,8 @@ class PipecatAssistCard extends HTMLElement {
               <span class="status-pill ${statusClass}">${escapeHtml(statusLabel)}</span>
             </div>
             <div class="actions">
-              ${needsAudioTap ? "<button class=\"secondary audio-button\">Enable audio</button>" : ""}
-              <button class="main-button">${running ? "Stop" : "Talk"}</button>
+              ${needsAudioTap ? `<button class="secondary audio-button">${escapeHtml(this.t("enableAudio"))}</button>` : ""}
+              <button class="main-button">${escapeHtml(running ? this.t("stop") : this.t("talk"))}</button>
             </div>
           </div>
           ${transcriptHtml}
@@ -1840,7 +1907,7 @@ class PipecatAssistCard extends HTMLElement {
     if (audioButton) {
       audioButton.onclick = () => {
         this.audioBlocked = false;
-        this.detail = "Connected. Speak to Pipecat Assist.";
+        this.detail = this.t("connectedDetail");
         this.render();
         this.attachAudio();
       };
@@ -1880,7 +1947,7 @@ function refreshPipecatAssistCard(card) {
   card.__pipecatAssistVersion = PIPECAT_ASSIST_CARD_VERSION;
   card.config = card.config || { name: "Pipecat Assist" };
   card.state = card.state || "idle";
-  card.detail = card.detail || "Ready";
+  card.detail = card.detail || card.t?.("ready") || "Ready";
   card.userTranscript = card.userTranscript || "";
   card.partialTranscript = card.partialTranscript || "";
   card.assistantTranscript = card.assistantTranscript || "";
@@ -1904,6 +1971,7 @@ function refreshPipecatAssistCard(card) {
   card.vScrollPos = card.vScrollPos || 0;
   card.vScrollSpeed = card.vScrollSpeed || 0;
   card.vScrollLastTs = 0;
+  card.vScrollTarget = card.vScrollTarget || 0;
   card.ttsEstimatedDuration = card.ttsEstimatedDuration || 0;
   card.audioBlocked = Boolean(card.audioBlocked);
   if (!card.shadowRoot && card.attachShadow) {
