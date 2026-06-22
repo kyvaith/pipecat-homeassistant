@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.59
+
+- Fix Lovelace card transcript merging so local browser transcripts and Pipecat
+  data-channel events no longer repeat the same user or assistant text.
+- Normalize transcript spacing around punctuation and streamed text chunks.
+- Replace the static Lovelace card wave decoration with a Web Audio canvas
+  visualizer inspired by JSVoice's analyser-based approach.
+
 ## 0.1.58
 
 - Force-refresh existing Lovelace card instances after the new module loads,

@@ -1,4 +1,4 @@
-const PIPECAT_ASSIST_CARD_VERSION = "0.1.58";
+const PIPECAT_ASSIST_CARD_VERSION = "0.1.59";
 const HA_ASSIST_SAMPLE_RATE_FALLBACK = 48000;
 const OPUS_AUDIO_QUALITY_PARAMS = {
   minptime: "20",
@@ -30,17 +30,65 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-function appendTranscript(existing, chunk) {
-  const text = String(chunk || "").trim();
-  if (!text) return existing || "";
-  if (!existing) return text;
-  if (text.startsWith(existing)) return text;
-  if (existing.endsWith(text)) return existing;
-  if (existing.endsWith(" ") || existing.endsWith("\n") || /^[,.;:!?)]/.test(text)) return `${existing}${text}`;
-  if (/[a-z0-9]$/i.test(existing) && /^[a-z0-9]/i.test(text)) {
-    return `${existing} ${text}`;
+function normalizeTranscriptText(value) {
+  return String(value || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:!?%…)\]}])/g, "$1")
+    .replace(/([,.;:!?])(?=\p{L}|\p{N})/gu, "$1 ")
+    .replace(/([([{])\s+/g, "$1")
+    .trim();
+}
+
+function compactTranscript(value) {
+  return normalizeTranscriptText(value)
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function transcriptOverlapSize(existing, incoming) {
+  const max = Math.min(existing.length, incoming.length, 160);
+  const existingLower = existing.toLocaleLowerCase();
+  const incomingLower = incoming.toLocaleLowerCase();
+  for (let length = max; length > 0; length -= 1) {
+    if (existingLower.slice(-length) === incomingLower.slice(0, length)) return length;
   }
-  return `${existing}${text}`;
+  return 0;
+}
+
+function transcriptJoiner(existing, incoming, rawIncoming) {
+  if (!existing || !incoming) return "";
+  if (/^\s/.test(String(rawIncoming || ""))) return " ";
+  if (/^[,.;:!?%…)\]}]/.test(incoming)) return "";
+  if (/[(\[{]$/.test(existing)) return "";
+  if (/[-/–—]$/.test(existing) || /^[-/–—]/.test(incoming)) return "";
+  if (incoming.length <= 3 && /\p{L}$/u.test(existing) && /^\p{L}/u.test(incoming)) return "";
+  return " ";
+}
+
+function mergeTranscript(existing, chunk) {
+  const current = normalizeTranscriptText(existing);
+  const rawText = String(chunk || "");
+  const text = normalizeTranscriptText(rawText);
+  if (!text) return current;
+  if (!current) return text;
+
+  const currentCompact = compactTranscript(current);
+  const textCompact = compactTranscript(text);
+  if (!textCompact) return current;
+  if (textCompact === currentCompact) return current;
+  if (textCompact.startsWith(currentCompact) && text.length >= current.length) return text;
+
+  const currentTail = compactTranscript(current.slice(-320));
+  if (textCompact.length > 3 && currentTail.includes(textCompact)) return current;
+
+  const overlap = transcriptOverlapSize(current, text);
+  if (overlap > 0) {
+    return normalizeTranscriptText(`${current}${text.slice(overlap)}`);
+  }
+
+  const joiner = transcriptJoiner(current, text, rawText);
+  return normalizeTranscriptText(`${current}${joiner}${text}`);
 }
 
 function shouldEndConversation(text) {
@@ -249,6 +297,162 @@ class PipecatAssistCard extends HTMLElement {
     }
   }
 
+  ensureVisualizerInput(name, stream) {
+    if (!stream?.getAudioTracks?.().length) return;
+    const trackIds = stream.getAudioTracks().map((track) => track.id).join(",");
+    if (this.visualizerInputs?.[name]?.trackIds === trackIds) return;
+    this.disconnectVisualizerInput(name);
+
+    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextConstructor) return;
+    try {
+      if (!this.visualizerContext || this.visualizerContext.state === "closed") {
+        this.visualizerContext = new AudioContextConstructor();
+      }
+      if (this.visualizerContext.state === "suspended") {
+        this.visualizerContext.resume().catch(() => {});
+      }
+      const source = this.visualizerContext.createMediaStreamSource(stream);
+      const analyser = this.visualizerContext.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = name === "remote" ? 0.72 : 0.82;
+      source.connect(analyser);
+      this.visualizerInputs = this.visualizerInputs || {};
+      this.visualizerInputs[name] = {
+        analyser,
+        data: new Uint8Array(analyser.frequencyBinCount),
+        source,
+        trackIds,
+      };
+    } catch {
+      this.disconnectVisualizerInput(name);
+    }
+  }
+
+  disconnectVisualizerInput(name) {
+    const input = this.visualizerInputs?.[name];
+    if (!input) return;
+    try {
+      input.source.disconnect();
+    } catch {
+      // Ignore already-disconnected visualizer nodes.
+    }
+    delete this.visualizerInputs[name];
+  }
+
+  ensureVisualizer() {
+    this.visualizerCanvas = this.shadowRoot?.querySelector(".visualizer");
+    if (this.stream) this.ensureVisualizerInput("local", this.stream);
+    if (this.remoteStream) this.ensureVisualizerInput("remote", this.remoteStream);
+    if (!this.visualizerFrame) this.drawVisualizer();
+  }
+
+  stopVisualizer() {
+    if (this.visualizerFrame) {
+      cancelAnimationFrame(this.visualizerFrame);
+      this.visualizerFrame = undefined;
+    }
+    for (const name of Object.keys(this.visualizerInputs || {})) {
+      this.disconnectVisualizerInput(name);
+    }
+    this.visualizerInputs = {};
+    if (this.visualizerContext && this.visualizerContext.state !== "closed") {
+      this.visualizerContext.close().catch(() => {});
+    }
+    this.visualizerContext = undefined;
+    this.visualizerCanvas = undefined;
+    this.visualizerEnergy = 0;
+  }
+
+  visualizerEnergyFor(name) {
+    const input = this.visualizerInputs?.[name];
+    if (!input?.analyser) return 0;
+    input.analyser.getByteFrequencyData(input.data);
+    const limit = Math.min(input.data.length, 96);
+    let sum = 0;
+    for (let index = 0; index < limit; index += 1) sum += input.data[index];
+    return Math.min(1, sum / Math.max(1, limit) / 150);
+  }
+
+  drawVisualizer() {
+    const canvas = this.visualizerCanvas;
+    const running = ["requesting", "connecting", "connected"].includes(this.state);
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const width = Math.max(1, Math.floor(rect.width * dpr));
+      const height = Math.max(1, Math.floor(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+
+      const ctx = canvas.getContext("2d");
+      const time = performance.now() / 1000;
+      const localEnergy = this.visualizerEnergyFor("local");
+      const remoteEnergy = this.visualizerEnergyFor("remote");
+      const targetEnergy = Math.max(localEnergy, remoteEnergy, running ? 0.06 : 0.025);
+      this.visualizerEnergy = (this.visualizerEnergy || 0) * 0.82 + targetEnergy * 0.18;
+      const energy = this.visualizerEnergy;
+
+      ctx.clearRect(0, 0, width, height);
+      const horizon = height * 0.68;
+      const gradient = ctx.createLinearGradient(0, 0, 0, height);
+      gradient.addColorStop(0, "rgba(96, 173, 255, 0.02)");
+      gradient.addColorStop(0.62, "rgba(45, 119, 255, 0.16)");
+      gradient.addColorStop(1, "rgba(64, 132, 255, 0.52)");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.save();
+      ctx.translate(width / 2, horizon + height * 0.68);
+      ctx.scale(1, 0.32);
+      ctx.beginPath();
+      ctx.arc(0, 0, width * (0.5 + energy * 0.07), 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(146, 198, 255, ${0.34 + energy * 0.28})`;
+      ctx.lineWidth = Math.max(1, 1.4 * dpr);
+      ctx.shadowColor = "rgba(69, 139, 255, 0.88)";
+      ctx.shadowBlur = 18 * dpr + energy * 30 * dpr;
+      ctx.stroke();
+      ctx.restore();
+
+      const drawWave = (color, offset, amplitude, widthScale, alpha) => {
+        ctx.beginPath();
+        for (let x = 0; x <= width; x += Math.max(2, width / 120)) {
+          const progress = x / width;
+          const envelope = Math.sin(progress * Math.PI);
+          const y = height * 0.45
+            + Math.sin(progress * Math.PI * 4.6 + time * 2.2 + offset) * amplitude * envelope
+            + Math.sin(progress * Math.PI * 9.2 - time * 1.4 - offset) * amplitude * 0.28 * envelope;
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = color.replace("ALPHA", alpha.toFixed(3));
+        ctx.lineWidth = Math.max(1, widthScale * dpr);
+        ctx.shadowColor = color.replace("ALPHA", "0.85");
+        ctx.shadowBlur = 10 * dpr + energy * 18 * dpr;
+        ctx.stroke();
+      };
+
+      drawWave("rgba(255, 255, 255, ALPHA)", 0, 10 * dpr + energy * 34 * dpr, 1.35, 0.52 + energy * 0.42);
+      drawWave("rgba(93, 169, 255, ALPHA)", 1.7, 16 * dpr + energy * 46 * dpr, 1.1, 0.42 + energy * 0.32);
+      drawWave("rgba(32, 108, 255, ALPHA)", 3.1, 20 * dpr + energy * 58 * dpr, 0.9, 0.28 + energy * 0.28);
+
+      ctx.shadowBlur = 0;
+      const barCount = 34;
+      for (let index = 0; index < barCount; index += 1) {
+        const progress = index / Math.max(1, barCount - 1);
+        const envelope = Math.sin(progress * Math.PI);
+        const pulse = 0.5 + 0.5 * Math.sin(time * 3.4 + index * 0.72);
+        const barHeight = (4 + pulse * 20 * energy) * dpr * envelope;
+        const x = progress * width;
+        ctx.fillStyle = `rgba(160, 211, 255, ${0.08 + energy * 0.26})`;
+        ctx.fillRect(x, horizon - barHeight, Math.max(1, 2 * dpr), barHeight);
+      }
+    }
+    this.visualizerFrame = requestAnimationFrame(() => this.drawVisualizer());
+  }
+
   startLocalSpeechRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
@@ -266,11 +470,11 @@ class PipecatAssistCard extends HTMLElement {
           const result = event.results[index];
           const text = result?.[0]?.transcript || "";
           if (!text) continue;
-          if (result.isFinal) finalText = appendTranscript(finalText, text);
-          else interimText = appendTranscript(interimText, text);
+          if (result.isFinal) finalText = mergeTranscript(finalText, text);
+          else interimText = mergeTranscript(interimText, text);
         }
-        if (finalText) this.userTranscript = appendTranscript(this.userTranscript, finalText);
-        this.partialTranscript = interimText;
+        if (finalText) this.userTranscript = mergeTranscript(this.userTranscript, finalText);
+        this.partialTranscript = normalizeTranscriptText(interimText);
         this.render();
         if (shouldEndConversation(`${this.userTranscript} ${this.partialTranscript}`)) {
           window.setTimeout(() => this.stop(), 250);
@@ -340,6 +544,7 @@ class PipecatAssistCard extends HTMLElement {
     this.peer?.close();
     this.peer = undefined;
     this.stopLocalSpeechRecognition();
+    this.stopVisualizer();
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = undefined;
     this.remoteStream?.getTracks().forEach((track) => track.stop());
@@ -379,6 +584,7 @@ class PipecatAssistCard extends HTMLElement {
         audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true },
         video: false,
       });
+      this.ensureVisualizer();
       this.startLocalSpeechRecognition();
 
       const peer = new RTCPeerConnection();
@@ -412,6 +618,7 @@ class PipecatAssistCard extends HTMLElement {
       peer.ontrack = (event) => {
         if (event.track.kind !== "audio") return;
         this.remoteStream = event.streams[0] || new MediaStream([event.track]);
+        this.ensureVisualizer();
         this.attachAudio();
       };
       peer.onconnectionstatechange = () => {
@@ -509,8 +716,8 @@ class PipecatAssistCard extends HTMLElement {
     const finalEvent = type.includes("final") || message.data?.final || message.is_final || message.final;
 
     if (userEvent && !assistantEvent) {
-      this.userTranscript = finalEvent ? appendTranscript(this.userTranscript, text) : appendTranscript("", text);
-      this.partialTranscript = finalEvent ? "" : text;
+      this.userTranscript = finalEvent ? mergeTranscript(this.userTranscript, text) : this.userTranscript;
+      this.partialTranscript = finalEvent ? "" : normalizeTranscriptText(text);
       this.render();
       if (shouldEndConversation(`${this.userTranscript} ${this.partialTranscript}`)) {
         window.setTimeout(() => this.stop(), 450);
@@ -519,7 +726,7 @@ class PipecatAssistCard extends HTMLElement {
     }
 
     if (assistantEvent) {
-      this.assistantTranscript = appendTranscript(this.assistantTranscript, text);
+      this.assistantTranscript = mergeTranscript(this.assistantTranscript, text);
       this.render();
       if (shouldEndConversation(this.assistantTranscript)) {
         window.setTimeout(() => this.stop(), 650);
@@ -549,43 +756,30 @@ class PipecatAssistCard extends HTMLElement {
     if (!this.shadowRoot) return;
     const running = ["requesting", "connecting", "connected"].includes(this.state);
     const needsAudioTap = running && this.audioBlocked;
-    const userText = this.partialTranscript || this.userTranscript || "Say something to Pipecat Assist.";
+    const userText = mergeTranscript(this.userTranscript, this.partialTranscript) || "Say something to Pipecat Assist.";
     const assistantText = this.assistantTranscript || (running ? "Listening..." : "Ready when you are.");
     this.shadowRoot.innerHTML = `
       <style>
         ha-card {
           display: block;
           overflow: hidden;
-          border-radius: 18px;
+          border-radius: 20px;
           background:
-            radial-gradient(circle at 50% 100%, rgba(32, 105, 255, 0.72), transparent 44%),
-            radial-gradient(circle at 50% 120%, rgba(111, 178, 255, 0.75), transparent 38%),
-            linear-gradient(145deg, #07182a 0%, #07111f 52%, #05080d 100%);
+            linear-gradient(180deg, rgba(10, 36, 67, 0.96) 0%, rgba(5, 15, 29, 0.98) 54%, rgba(4, 10, 19, 1) 100%);
           color: #f7fbff;
-          box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+          box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
+          border: 1px solid rgba(91, 157, 255, 0.34);
         }
         .wrap {
           display: grid;
-          min-height: 300px;
-          gap: 18px;
-          padding: 22px;
+          grid-template-rows: auto minmax(100px, 1fr) 142px;
+          min-height: 360px;
+          gap: 16px;
+          padding: 24px 24px 0;
           position: relative;
           overflow: hidden;
         }
-        .wrap::before {
-          content: "";
-          position: absolute;
-          left: 50%;
-          bottom: -120px;
-          width: 520px;
-          height: 220px;
-          transform: translateX(-50%);
-          border-radius: 50%;
-          border: 2px solid rgba(152, 191, 255, 0.55);
-          box-shadow: 0 0 28px rgba(84, 145, 255, 0.9), inset 0 0 30px rgba(84, 145, 255, 0.28);
-          pointer-events: none;
-        }
-        .head, .actions, .transcript, .wave, .version {
+        .head, .actions, .transcript, .visualizer-shell, .version {
           position: relative;
           z-index: 1;
         }
@@ -619,41 +813,69 @@ class PipecatAssistCard extends HTMLElement {
         }
         .transcript {
           display: grid;
-          gap: 8px;
-          min-height: 92px;
-          max-width: 92%;
-          font-size: 18px;
-          line-height: 1.35;
+          align-content: start;
+          gap: 10px;
+          min-height: 112px;
+          max-width: 100%;
+          font-size: 17px;
+          line-height: 1.38;
           text-shadow: 0 1px 16px rgba(0, 0, 0, 0.35);
+          overflow-wrap: anywhere;
         }
-        .transcript .user {
+        .message {
+          border-radius: 16px;
+          padding: 10px 12px;
+          backdrop-filter: blur(10px);
+        }
+        .message.user {
+          justify-self: start;
+          max-width: min(92%, 560px);
           color: rgba(226, 239, 255, 0.68);
+          background: rgba(255, 255, 255, 0.06);
+          border: 1px solid rgba(255, 255, 255, 0.08);
         }
-        .transcript .assistant {
+        .message.assistant {
+          justify-self: stretch;
           color: #ffffff;
           font-weight: 700;
+          background: linear-gradient(135deg, rgba(47, 119, 255, 0.16), rgba(255, 255, 255, 0.07));
+          border: 1px solid rgba(129, 189, 255, 0.16);
         }
-        .wave {
-          height: 84px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          filter: drop-shadow(0 0 12px rgba(73, 152, 255, 0.9));
+        .visualizer-shell {
+          min-height: 142px;
+          margin: 0 -24px;
+          overflow: hidden;
+          align-self: end;
         }
-        .wave span {
+        .visualizer-shell::before {
+          content: "";
+          position: absolute;
+          left: 50%;
+          bottom: -92px;
+          width: 118%;
+          height: 190px;
+          transform: translateX(-50%);
+          border-radius: 50% 50% 0 0;
+          border-top: 1px solid rgba(168, 209, 255, 0.58);
+          box-shadow:
+            0 -18px 46px rgba(49, 117, 255, 0.36),
+            inset 0 28px 70px rgba(51, 126, 255, 0.36);
+          pointer-events: none;
+        }
+        .visualizer-shell::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background:
+            linear-gradient(180deg, transparent 0%, rgba(39, 110, 255, 0.15) 55%, rgba(49, 118, 255, 0.48) 100%);
+          pointer-events: none;
+        }
+        .visualizer {
           display: block;
-          width: 58px;
-          height: 2px;
-          margin-left: -12px;
-          border-radius: 999px;
-          background: linear-gradient(90deg, transparent, rgba(191, 225, 255, 0.96), rgba(35, 120, 255, 0.95), transparent);
-          transform: translateY(var(--y)) rotate(var(--r));
-          animation: ${running ? "wave 1800ms ease-in-out infinite" : "none"};
-          animation-delay: var(--delay);
-        }
-        @keyframes wave {
-          0%, 100% { transform: translateY(var(--y)) rotate(var(--r)) scaleX(0.72); opacity: 0.35; }
-          50% { transform: translateY(var(--yn)) rotate(var(--rn)) scaleX(1.22); opacity: 1; }
+          width: 100%;
+          height: 142px;
+          position: relative;
+          z-index: 1;
         }
         button {
           min-height: 52px;
@@ -702,15 +924,11 @@ class PipecatAssistCard extends HTMLElement {
             </div>
           </div>
           <div class="transcript" aria-live="polite">
-            <div class="user">${escapeHtml(userText)}</div>
-            <div class="assistant">${escapeHtml(assistantText)}</div>
+            <div class="message user">${escapeHtml(userText)}</div>
+            <div class="message assistant">${escapeHtml(assistantText)}</div>
           </div>
-          <div class="wave" aria-hidden="true">
-            ${[0, 1, 2, 3, 4, 5, 6, 7].map((item) => {
-              const y = (item % 4) * 7 - 10;
-              const r = (item - 3) * 5;
-              return `<span style="--delay:${item * 95}ms;--y:${y}px;--yn:${-y}px;--r:${r}deg;--rn:${-r}deg"></span>`;
-            }).join("")}
+          <div class="visualizer-shell" aria-hidden="true">
+            <canvas class="visualizer"></canvas>
           </div>
           <span class="version">v${PIPECAT_ASSIST_CARD_VERSION}</span>
           <audio autoplay playsinline></audio>
@@ -718,6 +936,7 @@ class PipecatAssistCard extends HTMLElement {
       </ha-card>
     `;
     this.audio = this.shadowRoot.querySelector("audio");
+    this.ensureVisualizer();
     this.attachAudio();
     const audioButton = this.shadowRoot.querySelector(".audio-button");
     if (audioButton) {
