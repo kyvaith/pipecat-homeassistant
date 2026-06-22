@@ -1,6 +1,9 @@
-const PIPECAT_ASSIST_CARD_VERSION = "0.1.64";
+const PIPECAT_ASSIST_CARD_VERSION = "0.1.65";
 const DEFAULT_ACCENT_HEX = "#206cff";
 const DEFAULT_AUDIO_BUFFER_MS = 120;
+const STREAM_FADE_GROUPS = 4;
+const STREAM_CHARS_PER_GROUP = 2;
+const STREAM_FADE_LEN = STREAM_FADE_GROUPS * STREAM_CHARS_PER_GROUP;
 const HA_ASSIST_SAMPLE_RATE_FALLBACK = 48000;
 const OPUS_AUDIO_QUALITY_PARAMS = {
   minptime: "20",
@@ -397,6 +400,22 @@ class PipecatAssistCard extends HTMLElement {
     this.partialTranscript = "";
     this.currentUserText = "";
     this.currentUserUpdatedAt = 0;
+    this.chatMessages = [];
+    this.chatMessageSeq = 0;
+    this.currentUserMessageId = "";
+    this.currentAssistantMessageId = "";
+    this.streamAssistantMessageId = "";
+    this.streamEl = null;
+    this.streamFadeSpans = null;
+    this.streamSolidNode = null;
+    this.streamFadeMessageId = "";
+    this.pendingStreamText = null;
+    this.streamRafId = null;
+    this.vScrollRaf = null;
+    this.vScrollPos = 0;
+    this.vScrollSpeed = 0;
+    this.vScrollLastTs = 0;
+    this.ttsEstimatedDuration = 0;
     this.assistantTurnBase = "";
     this.assistantTurnText = "";
     this.assistantTurnPriority = 0;
@@ -446,9 +465,9 @@ class PipecatAssistCard extends HTMLElement {
     return {
       connected: "Connected",
       connecting: "Connecting",
-      error: "Needs attention",
+      error: "Error",
       idle: "Ready",
-      requesting: "Microphone",
+      requesting: "Connecting",
     }[this.state] || this.state || "Ready";
   }
 
@@ -456,6 +475,280 @@ class PipecatAssistCard extends HTMLElement {
     const detail = String(this.detail || "").trim();
     if (!detail || detail.toLowerCase() === label.toLowerCase()) return "";
     return detail.replace(new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.?\\s*`, "i"), "");
+  }
+
+  statusBadgeClass() {
+    if (this.state === "error") return "error";
+    if (this.state === "connected") return "connected";
+    if (this.state === "requesting" || this.state === "connecting") return "connecting";
+    return "ready";
+  }
+
+  resetTranscriptState() {
+    this.chatMessages = [];
+    this.chatMessageSeq = 0;
+    this.currentUserMessageId = "";
+    this.currentAssistantMessageId = "";
+    this.streamAssistantMessageId = "";
+    this.streamEl = null;
+    this.streamFadeSpans = null;
+    this.streamSolidNode = null;
+    this.streamFadeMessageId = "";
+    this.pendingStreamText = null;
+    this.ttsEstimatedDuration = 0;
+    this.vScrollPos = 0;
+    this.vScrollSpeed = 0;
+    this.vScrollLastTs = 0;
+    if (this.streamRafId) {
+      cancelAnimationFrame(this.streamRafId);
+      this.streamRafId = null;
+    }
+    this.stopTranscriptScroll();
+    this.syncTranscriptDom();
+  }
+
+  chatMessageById(id) {
+    return this.chatMessages.find((message) => message.id === id) || null;
+  }
+
+  transcriptContainer() {
+    return this.shadowRoot?.querySelector(".transcript-flow") || null;
+  }
+
+  transcriptTextElement(id) {
+    const root = this.shadowRoot;
+    if (!root) return null;
+    return [...root.querySelectorAll(".transcript-msg")]
+      .find((element) => element.dataset.chatId === id)
+      ?.querySelector(".transcript-text") || null;
+  }
+
+  appendChatMessage(type, text) {
+    const id = `m${++this.chatMessageSeq}`;
+    this.chatMessages.push({ id, type, text: normalizeTranscriptText(text) });
+    while (this.chatMessages.length > 12) {
+      const removed = this.chatMessages.shift();
+      if (removed?.id === this.currentUserMessageId) this.currentUserMessageId = "";
+      if (removed?.id === this.currentAssistantMessageId) this.currentAssistantMessageId = "";
+      if (removed?.id === this.streamAssistantMessageId) this.resetStreamFade();
+    }
+    this.syncTranscriptDom();
+    return id;
+  }
+
+  updateChatMessage(id, text, options = {}) {
+    const message = this.chatMessageById(id);
+    if (!message) return;
+    message.text = normalizeTranscriptText(text);
+    if (options.stream) {
+      this.scheduleStreamingText(id, message.text);
+      return;
+    }
+    if (id === this.streamFadeMessageId) this.resetStreamFade();
+    const el = this.transcriptTextElement(id);
+    if (el) {
+      el.textContent = message.text;
+      this.scrollTranscriptToEnd();
+    } else {
+      this.syncTranscriptDom();
+    }
+  }
+
+  syncTranscriptDom() {
+    const container = this.transcriptContainer();
+    if (!container) return;
+    const placeholder = container.querySelector(".transcript-placeholder");
+    if (!this.chatMessages.length) {
+      container.querySelectorAll(".transcript-msg").forEach((element) => element.remove());
+      if (!placeholder) {
+        const empty = document.createElement("div");
+        empty.className = "transcript-placeholder";
+        empty.textContent = "Ready when you are.";
+        container.appendChild(empty);
+      }
+      this.scrollTranscriptToEnd();
+      return;
+    }
+    if (placeholder) placeholder.remove();
+    const existing = new Map(
+      [...container.querySelectorAll(".transcript-msg")]
+        .map((element) => [element.dataset.chatId, element]),
+    );
+    const activeIds = new Set(this.chatMessages.map((message) => message.id));
+    for (const [id, element] of existing) {
+      if (!activeIds.has(id)) element.remove();
+    }
+    for (const message of this.chatMessages) {
+      let element = existing.get(message.id);
+      if (!element) {
+        element = document.createElement("div");
+        element.className = `transcript-msg ${message.type}`;
+        element.dataset.chatId = message.id;
+        const text = document.createElement("span");
+        text.className = "transcript-text";
+        element.appendChild(text);
+      }
+      element.className = `transcript-msg ${message.type}`;
+      const textEl = element.querySelector(".transcript-text");
+      if (textEl && message.id !== this.streamFadeMessageId) textEl.textContent = message.text;
+      container.appendChild(element);
+    }
+    this.streamEl = this.streamAssistantMessageId ? this.transcriptTextElement(this.streamAssistantMessageId) : null;
+    this.scrollTranscriptToEnd();
+  }
+
+  resetStreamFade() {
+    this.streamFadeSpans = null;
+    this.streamSolidNode = null;
+    this.streamFadeMessageId = "";
+    this.pendingStreamText = null;
+    if (this.streamRafId) {
+      cancelAnimationFrame(this.streamRafId);
+      this.streamRafId = null;
+    }
+  }
+
+  scheduleStreamingText(id, text) {
+    this.streamAssistantMessageId = id;
+    this.streamEl = this.transcriptTextElement(id);
+    if (!this.streamEl) this.syncTranscriptDom();
+    this.pendingStreamText = { id, text };
+    if (!this.streamRafId) {
+      this.streamRafId = requestAnimationFrame(() => {
+        this.streamRafId = null;
+        const pending = this.pendingStreamText;
+        this.pendingStreamText = null;
+        if (pending) this.updateStreamingText(pending.id, pending.text);
+      });
+    }
+  }
+
+  updateStreamingText(id, text) {
+    const el = this.transcriptTextElement(id);
+    if (!el) {
+      this.syncTranscriptDom();
+      return;
+    }
+    if (text.length <= STREAM_FADE_LEN) {
+      this.resetStreamFade();
+      el.textContent = text;
+      this.scrollTranscriptToEnd();
+      return;
+    }
+    if (this.streamFadeMessageId !== id || !this.streamFadeSpans) {
+      this.initStreamFadeNodes(id, el);
+    }
+    const solid = text.slice(0, text.length - STREAM_FADE_LEN);
+    const tail = text.slice(text.length - STREAM_FADE_LEN);
+    this.streamSolidNode.textContent = solid;
+    for (let index = 0; index < STREAM_FADE_GROUPS; index += 1) {
+      const start = index * STREAM_CHARS_PER_GROUP;
+      this.streamFadeSpans[index].textContent = tail.slice(start, start + STREAM_CHARS_PER_GROUP);
+    }
+    this.scrollTranscriptToEnd();
+  }
+
+  initStreamFadeNodes(id, el) {
+    el.textContent = "";
+    this.streamFadeMessageId = id;
+    this.streamSolidNode = document.createTextNode("");
+    el.appendChild(this.streamSolidNode);
+    this.streamFadeSpans = [];
+    for (let index = 0; index < STREAM_FADE_GROUPS; index += 1) {
+      const span = document.createElement("span");
+      span.style.opacity = ((STREAM_FADE_GROUPS - index) / STREAM_FADE_GROUPS).toFixed(2);
+      this.streamFadeSpans.push(span);
+      el.appendChild(span);
+    }
+  }
+
+  setCurrentUserCaption(text, startsNewTurn) {
+    const clean = normalizeTranscriptText(text);
+    if (!clean) return;
+    if (startsNewTurn || !this.currentUserMessageId || !this.chatMessageById(this.currentUserMessageId)) {
+      this.currentUserMessageId = this.appendChatMessage("user", clean);
+    } else {
+      this.updateChatMessage(this.currentUserMessageId, clean);
+    }
+  }
+
+  setCurrentAssistantCaption(text) {
+    const clean = normalizeTranscriptText(text);
+    if (!clean) return;
+    if (!this.currentAssistantMessageId || !this.chatMessageById(this.currentAssistantMessageId)) {
+      this.currentAssistantMessageId = this.appendChatMessage("assistant", clean);
+    }
+    this.streamAssistantMessageId = this.currentAssistantMessageId;
+    this.updateChatMessage(this.currentAssistantMessageId, clean, { stream: true });
+    this.ttsEstimatedDuration = this.estimateSpeechDuration(clean);
+  }
+
+  finalizeAssistantCaption() {
+    if (!this.currentAssistantMessageId || !this.assistantTurnText) return;
+    this.updateChatMessage(this.currentAssistantMessageId, this.assistantTurnText);
+    this.streamAssistantMessageId = "";
+    this.resetStreamFade();
+  }
+
+  estimateSpeechDuration(text) {
+    const words = normalizeTranscriptText(text).split(/\s+/).filter(Boolean).length;
+    const numbers = (String(text || "").match(/\d[\d,.]*%?/g) || []).length;
+    return Math.max(1.8, (words / 2.8) + (numbers * 0.7));
+  }
+
+  scrollTranscriptToEnd() {
+    const el = this.transcriptContainer();
+    if (!el) return;
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 0) return;
+    if (this.botSpeaking || this.assistantTurnActive || this.ttsEstimatedDuration > 0) {
+      this.startTranscriptScroll();
+      return;
+    }
+    el.scrollTop = max;
+  }
+
+  startTranscriptScroll() {
+    if (this.vScrollRaf) return;
+    const el = this.transcriptContainer();
+    if (el) this.vScrollPos = el.scrollTop;
+    this.vScrollLastTs = 0;
+    this.vScrollRaf = requestAnimationFrame((timestamp) => this.transcriptScrollTick(timestamp));
+  }
+
+  stopTranscriptScroll() {
+    if (this.vScrollRaf) {
+      cancelAnimationFrame(this.vScrollRaf);
+      this.vScrollRaf = null;
+    }
+    this.vScrollLastTs = 0;
+  }
+
+  transcriptScrollTick(timestamp) {
+    const el = this.transcriptContainer();
+    if (!el) {
+      this.stopTranscriptScroll();
+      return;
+    }
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 0) {
+      this.stopTranscriptScroll();
+      return;
+    }
+    if (!this.vScrollLastTs) this.vScrollLastTs = timestamp;
+    const deltaMs = timestamp - this.vScrollLastTs;
+    this.vScrollLastTs = timestamp;
+    const remainingPx = Math.max(0, max - this.vScrollPos);
+    const targetSpeed = Math.max(18, Math.min(220, remainingPx / Math.max(0.3, this.ttsEstimatedDuration || 1.2)));
+    this.vScrollSpeed = this.vScrollSpeed ? this.vScrollSpeed + ((targetSpeed - this.vScrollSpeed) * 0.12) : targetSpeed;
+    this.vScrollPos = Math.min(max, this.vScrollPos + (this.vScrollSpeed * deltaMs / 1000));
+    el.scrollTop = this.vScrollPos;
+    if (this.vScrollPos >= max - 0.5) {
+      el.scrollTop = max;
+      this.stopTranscriptScroll();
+      return;
+    }
+    this.vScrollRaf = requestAnimationFrame((nextTimestamp) => this.transcriptScrollTick(nextTimestamp));
   }
 
   baseUrl() {
@@ -907,6 +1200,7 @@ class PipecatAssistCard extends HTMLElement {
       this.partialTranscript = "";
       this.currentUserText = "";
       this.currentUserUpdatedAt = 0;
+      this.resetTranscriptState();
       this.assistantTurnBase = "";
       this.assistantTurnText = "";
       this.assistantTurnPriority = 0;
@@ -1049,6 +1343,9 @@ class PipecatAssistCard extends HTMLElement {
     this.assistantTurnText = "";
     this.assistantTurnPriority = 0;
     this.assistantTurnActive = true;
+    this.currentAssistantMessageId = "";
+    this.streamAssistantMessageId = "";
+    this.resetStreamFade();
     this.botSpeaking = true;
     this.ignoreLocalSpeechUntil = Date.now() + 1200;
   }
@@ -1061,6 +1358,7 @@ class PipecatAssistCard extends HTMLElement {
     this.assistantTranscript = normalizeTranscriptText(this.assistantTranscript);
     this.assistantTurnBase = this.assistantTranscript;
     if (this.assistantTurnText) {
+      this.finalizeAssistantCaption();
       this.assistantLastTurnText = this.assistantTurnText;
       this.assistantLastTurnPriority = this.assistantTurnPriority;
       this.assistantLastTurnFinishedAt = Date.now();
@@ -1070,6 +1368,8 @@ class PipecatAssistCard extends HTMLElement {
     this.assistantTurnPriority = 0;
     this.assistantTurnActive = false;
     this.botSpeaking = false;
+    this.streamAssistantMessageId = "";
+    this.ttsEstimatedDuration = 0;
     this.ignoreLocalSpeechUntil = Date.now() + 900;
     if (resumeLocalSpeech && ["requesting", "connecting", "connected"].includes(this.state)) {
       this.resumeLocalSpeechAfterAssistant(450);
@@ -1133,7 +1433,7 @@ class PipecatAssistCard extends HTMLElement {
         : mergeDisplayTurnText(this.currentUserText, cleanedText);
       this.currentUserUpdatedAt = now;
     }
-    this.render();
+    this.setCurrentUserCaption(this.currentUserText, startsNewUserTurn);
     if (shouldEndConversation(`${this.currentUserText} ${this.partialTranscript}`)) {
       window.setTimeout(() => this.stop(), 450);
     }
@@ -1182,20 +1482,10 @@ class PipecatAssistCard extends HTMLElement {
     this.assistantTranscript = mergeTranscript(this.assistantTurnBase, this.assistantTurnText);
     this.lastAssistantTextAt = Date.now();
     this.ignoreLocalSpeechUntil = Date.now() + 1200;
-    this.render();
+    this.setCurrentAssistantCaption(this.assistantTurnText);
     if (shouldEndConversation(this.assistantTranscript)) {
       window.setTimeout(() => this.stop(), 650);
     }
-  }
-
-  displayUserText() {
-    return mergeDisplayTurnText(this.currentUserText, this.partialTranscript);
-  }
-
-  displayAssistantText(running) {
-    return this.assistantTurnText
-      || this.assistantLastTurnText
-      || (running ? "Listening..." : "Ready when you are.");
   }
 
   handleRealtimeMessage(raw) {
@@ -1259,14 +1549,11 @@ class PipecatAssistCard extends HTMLElement {
     const accent = this.accentRgb();
     const accentRgb = `${accent.r}, ${accent.g}, ${accent.b}`;
     const statusLabel = this.statusLabel();
-    const statusDetail = this.statusDetail(statusLabel);
-    const userText = this.displayUserText();
-    const assistantText = this.displayAssistantText(running);
+    const statusClass = this.statusBadgeClass();
     const transcriptHtml = compact ? "" : `
-          <div class="${userText ? "transcript-frame" : "transcript-frame no-user"}" aria-live="polite">
-            ${userText ? `<div class="message user"><div class="message-text">${escapeHtml(userText)}</div></div>` : ""}
-            <div class="message assistant">
-              <div class="message-text">${escapeHtml(assistantText)}</div>
+          <div class="transcript-layer" aria-live="polite">
+            <div class="transcript-flow">
+              <div class="transcript-placeholder">Ready when you are.</div>
             </div>
           </div>`;
     this.shadowRoot.innerHTML = `
@@ -1288,20 +1575,20 @@ class PipecatAssistCard extends HTMLElement {
         }
         .wrap {
           display: grid;
-          grid-template-rows: auto auto 128px minmax(0, 1fr);
+          grid-template-rows: auto minmax(0, 1fr);
           height: 100%;
           max-height: 410px;
           box-sizing: border-box;
-          gap: 10px;
+          gap: 0;
           padding: 20px 24px 0;
           position: relative;
           overflow: hidden;
         }
         .wrap.compact {
-          grid-template-rows: auto auto minmax(0, 1fr);
+          grid-template-rows: auto minmax(0, 1fr);
           max-height: 286px;
         }
-        .head, .actions, .session-status, .transcript-frame, .visualizer-shell, .version {
+        .head, .actions, .transcript-layer, .visualizer-shell, .version {
           position: relative;
           z-index: 1;
         }
@@ -1323,20 +1610,16 @@ class PipecatAssistCard extends HTMLElement {
         }
         .title {
           min-width: 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
         }
         h3 {
           margin: 0;
           font-size: 18px;
           line-height: 1.2;
           color: #ffffff;
-        }
-        .session-status {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          min-width: 0;
-          font-size: 13px;
-          color: rgba(226, 239, 255, 0.74);
         }
         .status-pill {
           flex: 0 0 auto;
@@ -1348,75 +1631,115 @@ class PipecatAssistCard extends HTMLElement {
           color: #ffffff;
           font-size: 12px;
           font-weight: 800;
+          letter-spacing: 0;
           background: rgba(${accentRgb}, 0.18);
           border: 1px solid rgba(${accentRgb}, 0.38);
           box-shadow: 0 0 22px rgba(${accentRgb}, 0.18);
         }
-        .status-detail {
-          min-width: 0;
+        .status-pill.ready {
+          color: #caffdf;
+          background: rgba(34, 197, 94, 0.18);
+          border-color: rgba(34, 197, 94, 0.48);
+          box-shadow: 0 0 18px rgba(34, 197, 94, 0.18);
+        }
+        .status-pill.connected {
+          color: #e7f2ff;
+        }
+        .status-pill.connecting::after {
+          content: "...";
+          display: inline-block;
+          width: 18px;
           overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
+          vertical-align: bottom;
+          animation: pipecat-dots 1.1s steps(4, end) infinite;
         }
-        .transcript-frame {
-          display: grid;
-          grid-template-rows: 48px 70px;
-          gap: 10px;
-          max-width: 100%;
-          height: 128px;
-          max-height: 128px;
+        .status-pill.error {
+          color: #ffe1de;
+          background: rgba(217, 75, 64, 0.22);
+          border-color: rgba(217, 75, 64, 0.5);
+        }
+        @keyframes pipecat-dots {
+          0% { width: 0; }
+          100% { width: 18px; }
+        }
+        .transcript-layer {
+          position: absolute;
+          left: 24px;
+          right: 24px;
+          top: 76px;
+          bottom: 28px;
+          z-index: 3;
+          pointer-events: none;
           overflow: hidden;
+          display: flex;
+          align-items: stretch;
+          justify-content: flex-end;
+          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 16px, #000 calc(100% - 30px), transparent 100%);
+          mask-image: linear-gradient(180deg, transparent 0, #000 16px, #000 calc(100% - 30px), transparent 100%);
         }
-        .transcript-frame.no-user {
-          grid-template-rows: 96px;
-          align-content: end;
-        }
-        .message-text {
-          min-height: 0;
+        .transcript-flow {
+          width: 100%;
           max-height: 100%;
           overflow-y: auto;
-          padding-right: 2px;
+          overflow-x: hidden;
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-start;
+          align-items: flex-start;
+          padding: 10px 4px 30px 0;
+          box-sizing: border-box;
           scroll-behavior: smooth;
           scrollbar-width: none;
-          -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 18px), transparent 100%);
-          mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 18px), transparent 100%);
-          font-size: 17px;
-          line-height: 1.38;
-          text-shadow: 0 1px 16px rgba(0, 0, 0, 0.35);
+        }
+        .transcript-flow::-webkit-scrollbar { display: none; }
+        .transcript-placeholder {
+          margin-top: 6px;
+          color: rgba(226, 239, 255, 0.62);
+          font-size: 18px;
+          line-height: 1.3;
+          font-weight: 700;
+          text-shadow: 0 1px 18px rgba(0, 0, 0, 0.45);
+        }
+        .transcript-msg {
+          max-width: 92%;
+          opacity: 0;
+          animation: transcript-fade-in 0.3s ease forwards;
+          word-wrap: break-word;
+          white-space: pre-line;
+          background: none;
+          border: none;
+          box-shadow: none;
+          padding: 4px 0;
+          border-radius: 0;
+          text-shadow: 0 1px 18px rgba(0, 0, 0, 0.45);
           overflow-wrap: anywhere;
         }
-        .message-text::-webkit-scrollbar { display: none; }
-        .message {
-          display: flex;
-          min-height: 0;
-          max-height: 100%;
-          border-radius: 14px;
-          padding: 9px 11px;
-          backdrop-filter: blur(10px);
-          overflow: hidden;
+        .transcript-msg.user {
+          color: rgba(226, 239, 255, 0.56);
+          font-size: 16px;
+          line-height: 1.35;
+          font-weight: 500;
+          align-self: flex-start;
+          text-align: left;
         }
-        .message.user {
-          justify-self: start;
-          max-width: min(92%, 560px);
-          width: fit-content;
-          color: rgba(226, 239, 255, 0.68);
-          background: rgba(255, 255, 255, 0.06);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-        }
-        .message.assistant {
-          justify-self: stretch;
-          width: 100%;
-          box-sizing: border-box;
+        .transcript-msg.assistant {
           color: #ffffff;
+          font-size: 19px;
+          line-height: 1.35;
           font-weight: 700;
-          background: linear-gradient(135deg, rgba(${accentRgb}, 0.18), rgba(255, 255, 255, 0.07));
-          border: 1px solid rgba(${accentRgb}, 0.24);
+          align-self: flex-start;
+          text-align: left;
+        }
+        @keyframes transcript-fade-in {
+          0% { opacity: 0; transform: translateY(8px); }
+          100% { opacity: 1; transform: translateY(0); }
         }
         .visualizer-shell {
           position: relative;
           min-height: 0;
-          height: 156px;
-          margin: -10px -24px 0;
+          height: 100%;
+          min-height: 238px;
+          margin: 0 -24px;
           overflow: hidden;
           align-self: end;
           -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 30px, #000 100%);
@@ -1426,9 +1749,9 @@ class PipecatAssistCard extends HTMLElement {
           content: "";
           position: absolute;
           left: 50%;
-          bottom: -98px;
+          bottom: -106px;
           width: 118%;
-          height: 190px;
+          height: 208px;
           transform: translateX(-50%);
           border-radius: 50% 50% 0 0;
           border-top: 1px solid rgba(168, 209, 255, 0.58);
@@ -1448,7 +1771,8 @@ class PipecatAssistCard extends HTMLElement {
         .visualizer {
           display: block;
           width: 100%;
-          height: 156px;
+          height: 100%;
+          min-height: 238px;
           position: relative;
           z-index: 1;
         }
@@ -1488,15 +1812,12 @@ class PipecatAssistCard extends HTMLElement {
           <div class="head">
             <div class="title">
               <h3>${this.config.name || "Pipecat Assist"}</h3>
+              <span class="status-pill ${statusClass}">${escapeHtml(statusLabel)}</span>
             </div>
             <div class="actions">
               ${needsAudioTap ? "<button class=\"secondary audio-button\">Enable audio</button>" : ""}
               <button class="main-button">${running ? "Stop" : "Talk"}</button>
             </div>
-          </div>
-          <div class="session-status">
-            <span class="status-pill">${escapeHtml(statusLabel)}</span>
-            ${statusDetail ? `<span class="status-detail">${escapeHtml(statusDetail)}</span>` : ""}
           </div>
           ${transcriptHtml}
           <div class="visualizer-shell" aria-hidden="true">
@@ -1508,12 +1829,11 @@ class PipecatAssistCard extends HTMLElement {
       </ha-card>
     `;
     this.audio = this.shadowRoot.querySelector("audio");
-    this.shadowRoot.querySelectorAll(".message-text").forEach((node) => {
-      requestAnimationFrame(() => {
-        if (node.scrollTo) node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
-        else node.scrollTop = node.scrollHeight;
-      });
-    });
+    this.streamEl = this.streamAssistantMessageId ? this.transcriptTextElement(this.streamAssistantMessageId) : null;
+    this.streamFadeSpans = null;
+    this.streamSolidNode = null;
+    this.streamFadeMessageId = "";
+    this.syncTranscriptDom();
     this.ensureVisualizer();
     this.attachAudio();
     const audioButton = this.shadowRoot.querySelector(".audio-button");
@@ -1569,6 +1889,22 @@ function refreshPipecatAssistCard(card) {
   card.assistantTurnText = card.assistantTurnText || "";
   card.assistantLastTurnText = card.assistantLastTurnText || "";
   card.lastAssistantTextAt = card.lastAssistantTextAt || 0;
+  card.chatMessages = Array.isArray(card.chatMessages) ? card.chatMessages : [];
+  card.chatMessageSeq = card.chatMessageSeq || card.chatMessages.length || 0;
+  card.currentUserMessageId = card.currentUserMessageId || "";
+  card.currentAssistantMessageId = card.currentAssistantMessageId || "";
+  card.streamAssistantMessageId = card.streamAssistantMessageId || "";
+  card.streamEl = null;
+  card.streamFadeSpans = null;
+  card.streamSolidNode = null;
+  card.streamFadeMessageId = "";
+  card.pendingStreamText = null;
+  card.streamRafId = null;
+  card.vScrollRaf = null;
+  card.vScrollPos = card.vScrollPos || 0;
+  card.vScrollSpeed = card.vScrollSpeed || 0;
+  card.vScrollLastTs = 0;
+  card.ttsEstimatedDuration = card.ttsEstimatedDuration || 0;
   card.audioBlocked = Boolean(card.audioBlocked);
   if (!card.shadowRoot && card.attachShadow) {
     try {

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.65
+
+- Replace the Lovelace card transcript renderer with a streaming message model
+  inspired by `voice-satellite-card-integration`: in-place DOM updates,
+  requestAnimationFrame coalescing, fade-tail text, and smooth transcript
+  scrolling.
+- Move the card status into a compact badge next to the title, with green
+  Ready state and animated Connecting dots.
+- Let transcript text overlay the voice animation while keeping the card height
+  fixed and removing the secondary technical status lines.
+
 ## 0.1.64
 
 - Keep the Lovelace card at a fixed height while transcript text scrolls inside
