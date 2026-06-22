@@ -4,6 +4,27 @@
 
 # Pipecat Home Assistant
 
+<p align="center">
+  <a href="https://github.com/kyvaith/pipecat-homeassistant/actions/workflows/ci.yml">
+    <img alt="CI" src="https://github.com/kyvaith/pipecat-homeassistant/actions/workflows/ci.yml/badge.svg?branch=main">
+  </a>
+  <a href="https://github.com/kyvaith/pipecat-homeassistant/actions/workflows/publish.yml">
+    <img alt="Publish add-on image" src="https://github.com/kyvaith/pipecat-homeassistant/actions/workflows/publish.yml/badge.svg">
+  </a>
+  <a href="https://github.com/kyvaith/pipecat-homeassistant/releases">
+    <img alt="Latest release" src="https://img.shields.io/github/v/release/kyvaith/pipecat-homeassistant?label=release">
+  </a>
+  <a href="LICENSE">
+    <img alt="License" src="https://img.shields.io/github/license/kyvaith/pipecat-homeassistant">
+  </a>
+  <a href="https://www.home-assistant.io/">
+    <img alt="Home Assistant" src="https://img.shields.io/badge/Home%20Assistant-add--on%20%2B%20integration-41BDF5?logo=homeassistant&logoColor=white">
+  </a>
+  <a href="https://github.com/pipecat-ai/pipecat">
+    <img alt="Pipecat" src="https://img.shields.io/badge/Pipecat-realtime%20voice-111111">
+  </a>
+</p>
+
 Pipecat Assist brings realtime, multimodal Pipecat assistants to Home
 Assistant. It lets you talk to speech-to-speech realtime models, build custom
 Pipecat pipelines from cloud and local AI services, and keep Home Assistant
