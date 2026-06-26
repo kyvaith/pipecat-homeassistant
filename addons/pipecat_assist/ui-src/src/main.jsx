@@ -148,7 +148,7 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
-const ASSISTANT_CARD_VERSION = "0.1.74";
+const ASSISTANT_CARD_VERSION = "0.1.75";
 const ASSISTANT_CARD_ACCENT_HEX = "#206cff";
 const ASSISTANT_CARD_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;

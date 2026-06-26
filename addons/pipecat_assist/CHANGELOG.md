@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.75
+
+- Resize Pipecat Assist custom component brand assets to Home Assistant Brands
+  dimensions so the local Brands Proxy API can serve the integration icon and
+  logo correctly.
+
 ## 0.1.74
 
 - Restore stable widget transcription handling while keeping backend RTVI
