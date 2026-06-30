@@ -11,6 +11,7 @@ on:
 env:
   ARCHITECTURES: '["amd64", "aarch64"]'
   IMAGE_NAME: pipecat-assist
+  LEGACY_AMD64_IMAGE_NAME: pipecat-assist-legacy-amd64
   REGISTRY_PREFIX: ghcr.io/${{ github.repository }}
 
 permissions:
@@ -111,10 +112,51 @@ jobs:
           image-tags: ${{ steps.release.outputs.image_tags }}
           registry-prefix: ${{ env.REGISTRY_PREFIX }}
 
+  legacy-amd64:
+    name: Build legacy amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Prepare release tags
+        id: release
+        shell: bash
+        run: |
+          release_tag="${GITHUB_REF_NAME}"
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            release_tag="${{ github.event.release.tag_name }}"
+          fi
+          app_version="${release_tag#v}"
+
+          {
+            echo "image_tags<<EOF"
+            echo "${release_tag}"
+            if [[ "${app_version}" != "${release_tag}" ]]; then
+              echo "${app_version}"
+            fi
+            echo "latest"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+          echo "app_version=${app_version}" >> "${GITHUB_OUTPUT}"
+      - name: Build and push legacy amd64 image
+        uses: home-assistant/builder/actions/build-image@2026.06.0
+        with:
+          arch: amd64
+          build-args: |
+            BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:bookworm
+            LEGACY_AMD64_NUMPY=true
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: addons/pipecat_assist
+          cosign: "true"
+          image: ${{ env.REGISTRY_PREFIX }}/${{ env.LEGACY_AMD64_IMAGE_NAME }}
+          image-tags: ${{ steps.release.outputs.image_tags }}
+          push: "true"
+          version: ${{ steps.release.outputs.app_version }}
+
   github-release:
     name: Publish GitHub release
     needs:
       - manifest
+      - legacy-amd64
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:

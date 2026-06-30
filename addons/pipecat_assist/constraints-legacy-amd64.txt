@@ -1,0 +1,2 @@
+# Keep NumPy on the pre-x86-64-v2 wheel line for older amd64 CPUs.
+numpy<2.0

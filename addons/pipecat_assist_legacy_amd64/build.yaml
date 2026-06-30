@@ -1,0 +1,6 @@
+build_from:
+  amd64: ghcr.io/home-assistant/amd64-base-debian:bookworm
+args:
+  BUILD_VERSION: "{version}"
+  BUILD_ARCH: "{arch}"
+  LEGACY_AMD64_NUMPY: "true"

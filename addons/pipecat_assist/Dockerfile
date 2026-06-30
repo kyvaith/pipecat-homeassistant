@@ -3,6 +3,7 @@ FROM ${BUILD_FROM}
 
 ARG BUILD_VERSION=0.1.0
 ARG BUILD_ARCH=amd64
+ARG LEGACY_AMD64_NUMPY=false
 
 ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -25,8 +26,13 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml /tmp/pipecat_assist/pyproject.toml
+COPY constraints-legacy-amd64.txt /tmp/pipecat_assist/constraints-legacy-amd64.txt
 COPY app/ /tmp/pipecat_assist/app/
-RUN pip3 install /tmp/pipecat_assist \
+RUN if [ "${LEGACY_AMD64_NUMPY}" = "true" ]; then \
+        pip3 install --constraint /tmp/pipecat_assist/constraints-legacy-amd64.txt /tmp/pipecat_assist; \
+    else \
+        pip3 install /tmp/pipecat_assist; \
+    fi \
     && rm -rf /tmp/pipecat_assist
 
 COPY app/ /app/
@@ -42,4 +48,3 @@ LABEL \
 
 WORKDIR /
 CMD ["/run.sh"]
-

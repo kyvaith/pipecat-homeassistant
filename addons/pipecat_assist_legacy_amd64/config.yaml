@@ -1,0 +1,24 @@
+name: Pipecat Assist Legacy amd64
+version: "0.1.74"
+slug: pipecat_assist_legacy_amd64
+description: Realtime Pipecat assistant for older amd64 CPUs without x86-64-v2 support.
+url: https://github.com/kyvaith/pipecat-homeassistant
+image: ghcr.io/kyvaith/pipecat-homeassistant/pipecat-assist-legacy-amd64
+arch:
+  - amd64
+init: false
+startup: application
+boot: auto
+host_network: true
+ingress: true
+ingress_port: 7860
+panel_icon: mdi:account-voice
+homeassistant_api: true
+hassio_api: true
+hassio_role: manager
+options:
+  runner_port: 7860
+  log_level: "INFO"
+schema:
+  runner_port: port
+  log_level: list(DEBUG|INFO|WARNING|ERROR)
