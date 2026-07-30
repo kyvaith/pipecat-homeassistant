@@ -33,7 +33,10 @@ from pipecat.frames.frames import ErrorFrame, LLMRunFrame, URLImageRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
 from pipecat.processors.frameworks.rtvi import RTVIObserverParams
 from pipecat.runner.run import app, main as runner_main
 from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
@@ -4978,8 +4981,20 @@ async def run_bot(
             else LLMContext(context_messages)
         )
         context_for_memory = context
+        user_params = None
+        if provider_kind == "gemini":
+            from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+            from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+            user_params = LLMUserAggregatorParams(
+                vad_analyzer=_composed_vad_analyzer(flow),
+                user_turn_strategies=UserTurnStrategies(
+                    stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.2)]
+                ),
+            )
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
             context,
+            user_params=user_params,
             realtime_service_mode=True,
         )
 
@@ -5023,7 +5038,6 @@ async def run_bot(
             await worker.cancel()
 
     else:
-        from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
         from pipecat.processors.audio.vad_processor import VADProcessor
         from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
         from pipecat.turns.user_turn_strategies import UserTurnStrategies

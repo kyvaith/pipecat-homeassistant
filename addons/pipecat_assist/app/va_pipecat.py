@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import array
+import math
+import sys
 from collections.abc import Callable
 
+from loguru import logger
 from pipecat.frames.frames import (
     CancelFrame,
     EndFrame,
@@ -52,6 +56,45 @@ class VaPipecatFrameSerializer(FrameSerializer):
             wake_open_delay_ms=wake_open_delay_ms,
             playback_prebuffer_ms=playback_prebuffer_ms,
         )
+        self._reset_audio_probe()
+
+    def _reset_audio_probe(self) -> None:
+        self._probe_samples = 0
+        self._probe_nonzero = 0
+        self._probe_peak = 0
+        self._probe_energy = 0
+        self._probe_logged = False
+
+    def _probe_input_audio(self, data: bytes) -> None:
+        if self._probe_logged:
+            return
+
+        samples = array.array("h")
+        samples.frombytes(data)
+        if sys.byteorder != "little":
+            samples.byteswap()
+
+        self._probe_samples += len(samples)
+        for sample in samples:
+            absolute = abs(sample)
+            self._probe_peak = max(self._probe_peak, absolute)
+            self._probe_nonzero += int(sample != 0)
+            self._probe_energy += sample * sample
+
+        if self._probe_samples < INPUT_SAMPLE_RATE:
+            return
+
+        rms = math.sqrt(self._probe_energy / self._probe_samples)
+        nonzero_pct = 100.0 * self._probe_nonzero / self._probe_samples
+        logger.info(
+            "ESPHome audio ingress: samples={} rate={}Hz peak={} rms={:.1f} nonzero={:.1f}%",
+            self._probe_samples,
+            INPUT_SAMPLE_RATE,
+            self._probe_peak,
+            rms,
+            nonzero_pct,
+        )
+        self._probe_logged = True
 
     async def serialize(self, frame: Frame) -> str | bytes | None:
         if isinstance(frame, OutputAudioRawFrame):
@@ -72,6 +115,7 @@ class VaPipecatFrameSerializer(FrameSerializer):
         if isinstance(data, bytes):
             if not data or len(data) % 2:
                 return None
+            self._probe_input_audio(data)
             return InputAudioRawFrame(
                 audio=data,
                 sample_rate=INPUT_SAMPLE_RATE,
@@ -79,6 +123,8 @@ class VaPipecatFrameSerializer(FrameSerializer):
             )
 
         action = self.protocol.client_action(data)
+        if action == "wake":
+            self._reset_audio_probe()
         if action in {"interrupt", "stop"}:
             return InterruptionWorkerFrame()
         return None

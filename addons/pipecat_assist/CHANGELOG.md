@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.78
+
+- Add local Silero VAD turn boundaries for Gemini Live ESPHome satellites so
+  streamed microphone audio can reliably open and close user turns.
+- Avoid loading the Smart Turn analyzer for the realtime ESPHome path, keeping
+  turn detection deterministic and reducing startup overhead.
+- Log one low-overhead PCM level summary at the start of each ESPHome
+  conversation to distinguish silent microphone input from backend VAD issues.
+
 ## 0.1.77
 
 - Provision authenticated `va_pipecat` WebSocket endpoints automatically
