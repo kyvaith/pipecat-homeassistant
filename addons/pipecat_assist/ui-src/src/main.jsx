@@ -148,7 +148,7 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
-const ASSISTANT_CARD_VERSION = "0.1.75";
+const ASSISTANT_CARD_VERSION = "0.1.76";
 const ASSISTANT_CARD_ACCENT_HEX = "#206cff";
 const ASSISTANT_CARD_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -1616,6 +1616,23 @@ function ensureShape(config) {
     86400,
     Math.max(0, Number(shaped.mcp_tools_cache_ttl_seconds ?? 300)),
   );
+  shaped.runner_host = shaped.runner_host || "";
+  shaped.esphome_follow_up_ms = Math.min(
+    60000,
+    Math.max(0, Number(shaped.esphome_follow_up_ms ?? 30000)),
+  );
+  shaped.esphome_follow_up_open_delay_ms = Math.min(
+    5000,
+    Math.max(0, Number(shaped.esphome_follow_up_open_delay_ms ?? 80)),
+  );
+  shaped.esphome_wake_open_delay_ms = Math.min(
+    5000,
+    Math.max(0, Number(shaped.esphome_wake_open_delay_ms ?? 0)),
+  );
+  shaped.esphome_playback_prebuffer_ms = Math.min(
+    2000,
+    Math.max(0, Number(shaped.esphome_playback_prebuffer_ms ?? 300)),
+  );
   shaped.ai_image_provider_id = shaped.ai_image_provider_id || "";
   shaped.flows = (shaped.flows?.length ? shaped.flows : [clone(defaultFlow)]).map((flow) => {
     const merged = { ...clone(defaultFlow), ...flow };
@@ -2302,9 +2319,9 @@ function App() {
     setMessage({ text: "Audio captures cleared", tone: "ok" });
   }
 
-  async function copyOfferUrl() {
-    await navigator.clipboard.writeText(config.runner_offer_url || "");
-    setMessage({ text: "Copied", tone: "ok" });
+  async function copyEspHomeUrl() {
+    await navigator.clipboard.writeText(config.esphome_ws_url || "");
+    setMessage({ text: "ESPHome endpoint copied", tone: "ok" });
   }
 
   if (!config || !selectedFlow) {
@@ -2459,7 +2476,7 @@ function App() {
             config={config}
             flow={activeFlow}
             status={status}
-            copyOfferUrl={copyOfferUrl}
+            copyEspHomeUrl={copyEspHomeUrl}
             audioDebug={audioDebug}
             refreshAudioDebug={refreshAudioDebug}
             clearAudioDebug={clearAudioDebug}
@@ -6058,6 +6075,7 @@ function RuntimeSettingsPanel({ config, updateConfig }) {
 
 function RuntimeView({
   config,
+  copyEspHomeUrl,
   audioDebug,
   refreshAudioDebug,
   clearAudioDebug,
@@ -6071,6 +6089,12 @@ function RuntimeView({
   return (
     <div className="runtime-home">
       <section className="panel main-panel">
+        <EspHomeSatellitePanel
+          config={config}
+          copyEspHomeUrl={copyEspHomeUrl}
+          updateConfig={updateConfig}
+        />
+        <div className="divider" />
         <RuntimeSettingsPanel config={config} updateConfig={updateConfig} />
         <div className="divider" />
         <AudioDebugPanel
@@ -6093,6 +6117,123 @@ function RuntimeView({
         />
       </section>
     </div>
+  );
+}
+
+function EspHomeSatellitePanel({ config, copyEspHomeUrl, updateConfig }) {
+  return (
+    <>
+      <div className="panel-head">
+        <div>
+          <h3>ESPHome satellite</h3>
+          <span>Raw PCM full-duplex transport with server-driven conversation states</span>
+        </div>
+      </div>
+      <div className="setup-callout">
+        <Radio size={20} />
+        <div>
+          <strong>Use this endpoint in the ESPHome va_pipecat component.</strong>
+          <span>
+            It contains the satellite secret. Treat the complete URL like a password and use a
+            Home Assistant LAN address reachable by the device.
+          </span>
+        </div>
+      </div>
+      <div className="satellite-endpoint">
+        <Field label="WebSocket endpoint" wide>
+          <input readOnly spellCheck="false" value={config.esphome_ws_url || ""} />
+        </Field>
+        <Button icon={Copy} variant="secondary" onClick={copyEspHomeUrl}>
+          Copy endpoint
+        </Button>
+      </div>
+      <div className="form-grid satellite-settings">
+        <Field label="Device-reachable host" wide>
+          <input
+            spellCheck="false"
+            placeholder="homeassistant.local or 192.168.1.10"
+            value={config.runner_host || ""}
+            onChange={(event) =>
+              updateConfig((draft) => ({ ...draft, runner_host: event.target.value.trim() }))
+            }
+          />
+        </Field>
+        <Field label="Follow-up listening (ms)">
+          <input
+            type="number"
+            min="0"
+            max="60000"
+            step="100"
+            value={config.esphome_follow_up_ms}
+            onChange={(event) =>
+              updateConfig((draft) => ({
+                ...draft,
+                esphome_follow_up_ms: Math.min(60000, Math.max(0, Number(event.target.value || 0))),
+              }))
+            }
+          />
+        </Field>
+        <Field label="Follow-up mic delay (ms)">
+          <input
+            type="number"
+            min="0"
+            max="5000"
+            step="20"
+            value={config.esphome_follow_up_open_delay_ms}
+            onChange={(event) =>
+              updateConfig((draft) => ({
+                ...draft,
+                esphome_follow_up_open_delay_ms: Math.min(
+                  5000,
+                  Math.max(0, Number(event.target.value || 0)),
+                ),
+              }))
+            }
+          />
+        </Field>
+        <Field label="Wake mic delay (ms)">
+          <input
+            type="number"
+            min="0"
+            max="5000"
+            step="20"
+            value={config.esphome_wake_open_delay_ms}
+            onChange={(event) =>
+              updateConfig((draft) => ({
+                ...draft,
+                esphome_wake_open_delay_ms: Math.min(
+                  5000,
+                  Math.max(0, Number(event.target.value || 0)),
+                ),
+              }))
+            }
+          />
+        </Field>
+        <Field label="Playback prebuffer (ms)">
+          <input
+            type="number"
+            min="0"
+            max="2000"
+            step="20"
+            value={config.esphome_playback_prebuffer_ms}
+            onChange={(event) =>
+              updateConfig((draft) => ({
+                ...draft,
+                esphome_playback_prebuffer_ms: Math.min(
+                  2000,
+                  Math.max(0, Number(event.target.value || 0)),
+                ),
+              }))
+            }
+          />
+        </Field>
+      </div>
+      <p className="field-help">
+        Save Runtime after changing the host. The endpoint is regenerated with the same secret.
+        Follow-up 0 disables continuous conversation; playback prebuffer trades latency for jitter
+        tolerance.
+      </p>
+    </>
   );
 }
 

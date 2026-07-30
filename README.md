@@ -62,8 +62,12 @@ device control through MCP.
 - **Home Assistant AI Tasks / AI Actions**: Pipecat Assist can be selected for
   generated-data and image-generation tasks where your Home Assistant version
   exposes AI Task entities.
-- **Pipecat ESP32 satellites**: the add-on exposes a SmallWebRTC endpoint for
-  satellite clients.
+- **ESPHome voice satellites**: the included `va_pipecat` component provides
+  wake-word turns, live transcripts, deterministic UI phases, follow-up
+  conversation, and full-duplex barge-in over an authenticated raw-PCM
+  WebSocket.
+- **Pipecat ESP32 clients**: the existing SmallWebRTC `/api/offer` endpoint
+  remains available for standalone `pipecat-esp32` firmware.
 
 The Home Assistant Assist path uses an advanced Pipecat Live Bridge so HA
 Assist can talk to speech-to-speech realtime assistants such as Gemini Live and
@@ -135,10 +139,12 @@ responsive realtime experience.
 ## Repository layout
 
 - `addons/pipecat_assist` - the Home Assistant app/add-on. It runs Pipecat,
-  exposes a configuration UI through Ingress, serves `/api/offer` for
-  Pipecat ESP32 SmallWebRTC clients, and connects to Home Assistant MCP.
+  exposes a configuration UI through Ingress, serves WebRTC and ESPHome
+  satellite transports, and connects to Home Assistant MCP.
 - `addons/pipecat_assist/ui-src` - the React source for the pipeline editor
   shipped as static assets inside the add-on image.
+- `components/va_pipecat` - the ESPHome external component and its device-side
+  PCM transport.
 - `custom_components/pipecat_assist` - a Home Assistant integration that
   exposes Pipecat Assist as Conversation, STT, TTS, AI Task entities, and the
   Lovelace WebRTC card asset.
@@ -149,7 +155,8 @@ responsive realtime experience.
 
 ```mermaid
 flowchart LR
-    ESP32["Pipecat ESP32 satellite"] -->|"SmallWebRTC /api/offer"| Addon["Pipecat Assist add-on"]
+    ESPHome["ESPHome va_pipecat satellite"] -->|"PCM WebSocket /api/assist/esphome"| Addon["Pipecat Assist add-on"]
+    ESP32["Standalone Pipecat ESP32"] -->|"SmallWebRTC /api/offer"| Addon
     Browser["HA Ingress UI"] --> Addon
     HAConv["HA Assist bridge"] -->|"Conversation / STT / TTS HTTP bridge"| Addon
     Lovelace["Lovelace card"] -->|"WebRTC /api/offer"| Addon
@@ -175,8 +182,9 @@ flowchart LR
    speech-to-speech profiles and composed realtime profiles such as
    `Soniox + OpenAI + Cartesia`, `Deepgram + Gemini + Google TTS`, and
    `Speechmatics + AWS Nova Pro + ElevenLabs`.
-5. Build Pipecat ESP32 firmware with the generated
-   `PIPECAT_SMALLWEBRTC_URL`.
+5. For ESPHome, open **Runtime > ESPHome satellite**, copy the authenticated
+   endpoint into `secrets.yaml`, and add the bundled `va_pipecat` external
+   component.
 
 Home Assistant MCP access uses the add-on's Supervisor token by default. Use
 **Integrations > Home Assistant MCP > Automatic defaults** to clear custom MCP
@@ -261,18 +269,32 @@ WAV files for microphone input and assistant output under `/data/audio-debug`
 and exposes download links in the Runtime panel. Use **Clear** after debugging,
 because these files may contain private household audio.
 
-## Pipecat ESP32
+## ESPHome satellites
 
-Pipecat ESP32 expects a SmallWebRTC offer endpoint:
+The repository includes the `va_pipecat` ESPHome external component:
 
-```bash
-export PIPECAT_SMALLWEBRTC_URL="http://<home-assistant-lan-ip>:7860/api/offer?token=<satellite-secret>"
+```yaml
+external_components:
+  - source: github://kyvaith/pipecat-homeassistant@dev
+    components: [va_pipecat]
+
+va_pipecat:
+  id: pipecat_va
+  url: !secret pipecat_satellite_url
+  microphone:
+    microphone: processed_microphone
+    channels: 0
+  speaker: assistant_speaker
+  barge_in: true
 ```
 
-This repository intentionally keeps the ESP32 firmware separate for now. The
-next step is to integrate Pipecat ESP32 into ESPHome so the device side and the
-Home Assistant add-on become one ecosystem. The direct ESP32 authentication
-path will move toward the standard Home Assistant token flow during that work.
+Copy the complete authenticated URL from **Runtime > ESPHome satellite**. See
+[the component reference](components/va_pipecat/README.md) and
+[architecture notes](docs/architecture/esphome-satellite.md) for the full
+configuration and conversation lifecycle.
+
+Standalone `pipecat-esp32` clients remain supported through the SmallWebRTC
+`/api/offer` endpoint.
 
 ## Vision services
 

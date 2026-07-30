@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.76
+
+- Add the product-ready ESPHome `va_pipecat` component and an authenticated,
+  versioned raw-PCM WebSocket endpoint.
+- Keep a warm Pipecat pipeline for wake-word turns, full-duplex barge-in,
+  transcripts, deterministic follow-up listening, and terminal conversation
+  states.
+- Expose satellite timing and jitter-buffer controls in Runtime settings.
+- Preserve `thinking` while Home Assistant tools are running and avoid an
+  unsolicited greeting when the ESPHome satellite connects.
+
 ## 0.1.75
 
 - Resize Pipecat Assist custom component brand assets to Home Assistant Brands

@@ -198,7 +198,7 @@ resource and then add a manual card:
 ```yaml
 lovelace:
   resources:
-    - url: /pipecat_assist/pipecat-assist-card.js?v=0.1.75
+    - url: /pipecat_assist/pipecat-assist-card.js?v=0.1.76
       type: module
 ```
 
@@ -235,19 +235,44 @@ little extra delay.
   another Gemini Live voice.
 - Browser voice test has no microphone: use HTTPS or a trusted local origin.
 
-## Pipecat ESP32
+## ESPHome satellite
 
-Build the ESP32 firmware with:
+Open **Runtime > ESPHome satellite** and copy the complete WebSocket endpoint.
+The endpoint contains the satellite secret and selected pipeline. Replace its
+host with the Home Assistant LAN address if the displayed Ingress host is not
+reachable from the device, then store the URL in ESPHome `secrets.yaml`.
+
+```yaml
+external_components:
+  - source: github://kyvaith/pipecat-homeassistant@dev
+    components: [va_pipecat]
+
+va_pipecat:
+  id: pipecat_va
+  url: !secret pipecat_satellite_url
+  microphone:
+    microphone: processed_microphone
+    channels: 0
+  speaker: assistant_speaker
+  barge_in: true
+```
+
+The endpoint uses PCM16 mono at 16 kHz from the device and PCM16 mono at 24 kHz
+for assistant playback. Pipecat drives `listening`, `thinking`, `speaking`, and
+terminal states. The device delays post-response transitions until its local
+speaker buffers have drained.
+
+Full setup, actions, triggers, and lifecycle:
+[components/va_pipecat/README.md](../../components/va_pipecat/README.md).
+
+## Standalone Pipecat ESP32
+
+The SmallWebRTC endpoint remains available for standalone `pipecat-esp32`
+firmware:
 
 ```bash
 export PIPECAT_SMALLWEBRTC_URL="http://<ha-lan-ip>:7860/api/offer?token=<satellite-secret>"
 ```
-
-Pipecat Assist starts the SmallWebRTC runner with ESP32 compatibility enabled.
-The ESP32 satellite uses the active pipeline selected in **Pipelines**, so the
-same model, instructions, greeting, MCP tools, and Pipecat Flow settings apply
-to browser tests and satellites. The direct ESP32 authentication path will move
-to the standard Home Assistant token flow as the ESPHome integration work lands.
 
 ## Home Assistant integration
 

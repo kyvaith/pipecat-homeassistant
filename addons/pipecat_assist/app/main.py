@@ -12,6 +12,7 @@ import os
 import re
 import time
 import unicodedata
+import uuid
 import wave
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -35,7 +36,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frameworks.rtvi import RTVIObserverParams
 from pipecat.runner.run import app, main as runner_main
-from pipecat.runner.types import RunnerArguments
+from pipecat.runner.types import RunnerArguments, WebSocketRunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.openai.realtime.events import (
     AudioConfiguration,
@@ -100,6 +101,8 @@ from app.mcp_bridge import (
 )
 from app.session_memory import SESSION_MEMORY
 from app.text_agent import run_text_conversation
+from app.va_pipecat import websocket_transport_params
+from app.va_pipecat_protocol import VaPipecatProtocol
 from app.web_search_tool import run_gemini_web_search, run_openai_web_search, web_search_schema
 
 STORE = ConfigStore()
@@ -568,6 +571,43 @@ def _offer_path(config: RuntimeConfig) -> str:
     return f"api/offer{suffix}"
 
 
+def _esphome_ws_query(config: RuntimeConfig) -> str:
+    values = {
+        "token": config.satellite_shared_secret,
+        "flow_id": config.selected_flow_id,
+    }
+    return urlencode({key: value for key, value in values.items() if value})
+
+
+def _esphome_ws_url(config: RuntimeConfig, request: Request) -> str:
+    host = config.runner_host
+    if host in {"0.0.0.0", "::", ""}:
+        host = request.url.hostname or "homeassistant.local"
+    query = _esphome_ws_query(config)
+    suffix = f"?{query}" if query else ""
+    # The host-network runner port is plain WebSocket even when this response
+    # was reached through an HTTPS Home Assistant Ingress page.
+    return f"ws://{host}:{config.runner_port}/api/assist/esphome{suffix}"
+
+
+def _esphome_ws_path(config: RuntimeConfig) -> str:
+    query = _esphome_ws_query(config)
+    suffix = f"?{query}" if query else ""
+    return f"api/assist/esphome{suffix}"
+
+
+def _va_pipecat_protocol(config: RuntimeConfig) -> VaPipecatProtocol:
+    """Build the ESPHome protocol contract from persisted runtime settings."""
+
+    return VaPipecatProtocol(
+        _should_end_conversation,
+        follow_up_ms=config.esphome_follow_up_ms,
+        follow_up_open_delay_ms=config.esphome_follow_up_open_delay_ms,
+        wake_open_delay_ms=config.esphome_wake_open_delay_ms,
+        playback_prebuffer_ms=config.esphome_playback_prebuffer_ms,
+    )
+
+
 def _supervisor_headers() -> dict[str, str]:
     token = os.getenv("SUPERVISOR_TOKEN", "")
     if not token:
@@ -714,6 +754,8 @@ def _config_response(config: RuntimeConfig, request: Request) -> dict[str, Any]:
     data = config.public_dict()
     data["runner_offer_url"] = _offer_url(config, request)
     data["runner_offer_path"] = _offer_path(config)
+    data["esphome_ws_url"] = _esphome_ws_url(config, request)
+    data["esphome_ws_path"] = _esphome_ws_path(config)
     return data
 
 
@@ -771,6 +813,7 @@ async def api_status(request: Request):
             "port": config.runner_port,
             "offer_url": _offer_url(config, request),
             "offer_path": _offer_path(config),
+            "esphome_ws_path": "api/assist/esphome",
         },
         "selected_flow_id": config.selected_flow_id,
         "selected_flow_ready": not flow_errors,
@@ -780,6 +823,72 @@ async def api_status(request: Request):
         "mcp_token_configured": bool(config.effective_mcp_token),
         "mcp_token_source": config.effective_mcp_token_source,
     }
+
+
+@app.websocket("/api/assist/esphome")
+async def api_esphome_satellite(websocket: WebSocket):
+    """Run an authenticated raw-PCM Pipecat session for an ESPHome satellite."""
+
+    config = STORE.load()
+    secret = config.satellite_shared_secret
+    supplied_token = _extract_token(websocket)
+    if secret and not hmac.compare_digest(supplied_token, secret):
+        logger.warning("ESPHome satellite rejected: invalid or missing token")
+        await websocket.close(code=4401)
+        return
+
+    flow_id = str(websocket.query_params.get("flow_id") or "").strip()
+    flow = config.selected_flow(flow_id)
+    flow_errors = _runtime_flow_errors(config, flow)
+    if flow_errors:
+        await websocket.close(code=4400, reason=flow_errors[0][:120])
+        return
+
+    client_id = (
+        str(websocket.query_params.get("client_id") or "").strip()
+        or str(websocket.client.host if websocket.client else "")
+        or f"esphome-{uuid.uuid4().hex[:12]}"
+    )
+    session_id = str(uuid.uuid4())
+    await websocket.accept()
+    await websocket.send_text(_va_pipecat_protocol(config).hello())
+    logger.info(
+        "ESPHome satellite connected client_id={} flow={} session={}",
+        client_id,
+        flow.id,
+        session_id,
+    )
+
+    runner_args = WebSocketRunnerArguments(
+        websocket=websocket,
+        transport_type="websocket",
+        session_id=session_id,
+        body={
+            "client_id": client_id,
+            "device_id": client_id,
+            "flow_id": flow.id,
+            "transport": "va-pipecat",
+        },
+    )
+    # ESPHome keeps this low-latency control connection open from boot. The
+    # generic runner's five-minute idle timeout is useful for browser calls but
+    # would churn the satellite pipeline and MCP/model warm state.
+    runner_args.pipeline_idle_timeout_secs = None
+    try:
+        await bot(runner_args)
+    except WebSocketDisconnect:
+        logger.info("ESPHome satellite disconnected client_id={}", client_id)
+    except Exception as err:
+        logger.exception("ESPHome satellite session failed client_id={}: {}", client_id, err)
+        with suppress(Exception):
+            payload = _va_pipecat_protocol(config).error_message(
+                "session_failed",
+                str(err) or err.__class__.__name__,
+                recoverable=True,
+            )
+            await websocket.send_text(payload)
+        with suppress(Exception):
+            await websocket.close(code=1011)
 
 
 @app.get("/api/assist/config")
@@ -2618,12 +2727,19 @@ def _session_properties(
     )
 
 
-def _transport_params(flow: FlowConfig) -> dict[str, Any]:
+def _transport_params(config: RuntimeConfig, flow: FlowConfig) -> dict[str, Any]:
     return {
         "webrtc": lambda: TransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             video_in_enabled=flow.video_enabled,
+        ),
+        "websocket": lambda: websocket_transport_params(
+            _should_end_conversation,
+            follow_up_ms=config.esphome_follow_up_ms,
+            follow_up_open_delay_ms=config.esphome_follow_up_open_delay_ms,
+            wake_open_delay_ms=config.esphome_wake_open_delay_ms,
+            playback_prebuffer_ms=config.esphome_playback_prebuffer_ms,
         ),
     }
 
@@ -4734,6 +4850,7 @@ async def run_bot(
     provider_kind = integration.kind if integration else flow.provider_id
     runtime_mode = _runtime_mode(flow, provider_kind)
     session_body = _runner_body(runner_args)
+    is_esphome_satellite = session_body.get("transport") == "va-pipecat"
     client_id = _session_client_id(runner_args, flow)
     language_override = str(session_body.get("language") or "").strip() or None
 
@@ -4883,7 +5000,7 @@ async def run_bot(
             logger.info("Client connected to flow {}", flow.id)
             if _flow_enabled(flow):
                 logger.warning("Pipecat Flows are ignored for speech-to-speech runtime {}", provider_kind)
-            if flow.greeting.strip():
+            if flow.greeting.strip() and not is_esphome_satellite:
                 await worker.queue_frames([LLMRunFrame()])
 
         @transport.event_handler("on_client_disconnected")
@@ -4997,7 +5114,7 @@ async def run_bot(
             logger.info("Client connected to composed flow {}", flow.id)
             if flow_manager and initial_flow_node:
                 await flow_manager.initialize(initial_flow_node)
-            elif flow.greeting.strip():
+            elif flow.greeting.strip() and not is_esphome_satellite:
                 await worker.queue_frames([LLMRunFrame()])
 
         @transport.event_handler("on_client_disconnected")
@@ -5033,7 +5150,7 @@ async def bot(runner_args: RunnerArguments):
     flow_errors = _runtime_flow_errors(config, flow)
     if flow_errors:
         raise RuntimeError(flow_errors[0])
-    transport = await create_transport(runner_args, _transport_params(flow))
+    transport = await create_transport(runner_args, _transport_params(config, flow))
     await run_bot(transport, runner_args, config, flow, mcp_token=config.effective_mcp_token)
 
 

@@ -886,6 +886,17 @@ h3 {
   gap: 12px;
 }
 
+.satellite-endpoint {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.satellite-settings {
+  margin-top: 12px;
+}
+
 .field,
 .toggle {
   display: grid;
@@ -1305,6 +1316,10 @@ button:disabled {
   }
 
   .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .satellite-endpoint {
     grid-template-columns: 1fr;
   }
 

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - dev
 
 permissions:
   contents: read
@@ -21,6 +22,9 @@ jobs:
       - name: Compile Python sources
         run: |
           python -m compileall addons/pipecat_assist/app custom_components/pipecat_assist
+      - name: Test ESPHome satellite protocol
+        run: |
+          python -m unittest tests.test_va_pipecat_protocol -v
 
   docker:
     name: Docker build
@@ -28,5 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Build add-on image
-        run: docker build --build-arg BUILD_VERSION=dev --build-arg BUILD_ARCH=amd64 addons/pipecat_assist
-
+        run: |
+          docker build \
+            --tag pipecat-assist-ci \
+            --build-arg BUILD_VERSION=dev \
+            --build-arg BUILD_ARCH=amd64 \
+            addons/pipecat_assist
+      - name: Test ESPHome satellite transport in the add-on image
+        run: |
+          docker run --rm \
+            --entrypoint python3 \
+            --volume "${{ github.workspace }}/tests:/tests:ro" \
+            pipecat-assist-ci \
+            -m unittest discover -s /tests -v

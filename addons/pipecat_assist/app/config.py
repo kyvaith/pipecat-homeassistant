@@ -561,7 +561,7 @@ class FlowConfig(BaseModel):
 class RuntimeConfig(BaseModel):
     """Persisted runtime configuration edited by the web UI."""
 
-    version: int = 20
+    version: int = 21
     openai_api_key: str = ""
     text_model: str = DEFAULT_GEMINI_TEXT_MODEL
     ha_mcp_url: str = ""
@@ -569,6 +569,10 @@ class RuntimeConfig(BaseModel):
     satellite_shared_secret: str = ""
     runner_host: str = ""
     runner_port: int = Field(default=7860, ge=1024, le=65535)
+    esphome_follow_up_ms: int = Field(default=30000, ge=0, le=60000)
+    esphome_follow_up_open_delay_ms: int = Field(default=80, ge=0, le=5000)
+    esphome_wake_open_delay_ms: int = Field(default=0, ge=0, le=5000)
+    esphome_playback_prebuffer_ms: int = Field(default=300, ge=0, le=2000)
     esp32_mode: bool = False
     enable_default_ice_servers: bool = False
     audio_debug_enabled: bool = False
@@ -771,6 +775,18 @@ def default_config_from_environment() -> RuntimeConfig:
         satellite_shared_secret=os.getenv("SATELLITE_SHARED_SECRET", ""),
         runner_host=os.getenv("RUNNER_HOST", ""),
         runner_port=_env_int("RUNNER_PORT", 7860),
+        esphome_follow_up_ms=max(
+            0, min(60000, _env_int("ESPHOME_FOLLOW_UP_MS", 30000))
+        ),
+        esphome_follow_up_open_delay_ms=max(
+            0, min(5000, _env_int("ESPHOME_FOLLOW_UP_OPEN_DELAY_MS", 80))
+        ),
+        esphome_wake_open_delay_ms=max(
+            0, min(5000, _env_int("ESPHOME_WAKE_OPEN_DELAY_MS", 0))
+        ),
+        esphome_playback_prebuffer_ms=max(
+            0, min(2000, _env_int("ESPHOME_PLAYBACK_PREBUFFER_MS", 300))
+        ),
         esp32_mode=_env_bool("ESP32_MODE", False),
         audio_debug_enabled=_env_bool("AUDIO_DEBUG_ENABLED", False),
         audio_debug_keep_sessions=min(100, max(1, _env_int("AUDIO_DEBUG_KEEP_SESSIONS", 10))),
@@ -1559,6 +1575,10 @@ class ConfigStore:
 
         if config.version < 20:
             config.version = 20
+            changed = True
+
+        if config.version < 21:
+            config.version = 21
             changed = True
 
         for flow in config.flows:
