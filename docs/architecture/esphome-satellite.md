@@ -7,8 +7,9 @@ versioned raw-PCM WebSocket transport at:
 ws://<home-assistant-lan-host>:7860/api/assist/esphome
 ```
 
-The complete URL shown in **Runtime > ESPHome satellite** includes the active
-pipeline and satellite secret.
+The complete URL includes the active pipeline and satellite secret. A manual
+copy is available in **Runtime > ESPHome satellite**, but normal add-on
+installations provision it automatically through Home Assistant's native API.
 
 ## Why a dedicated ESPHome transport
 
@@ -83,8 +84,17 @@ hear while avoiding device-side guesses about model or tool progress.
 
 - The endpoint is host-network `ws://` by default. Use it only on a trusted LAN
   or behind a TLS reverse proxy that terminates `wss://`.
-- The query token is a secret. Store it in ESPHome `secrets.yaml`, do not commit
-  it, and rotate it if exposed.
+- With `auto_provision: true`, `va_pipecat` registers a hidden
+  `provision_pipecat(endpoint)` action. The add-on discovers namespaced ESPHome
+  actions through the Home Assistant Core API and invokes each one every 15
+  seconds. Repeating an unchanged endpoint is a no-op on the device and makes
+  device reconnects self-healing.
+- The add-on resolves its host from the configured runner host override,
+  Home Assistant `internal_url`, `external_url`, then
+  `homeassistant.local`. The runner's actual port is always used.
+- The query token is a secret. It is transported as transient action data and
+  is not published in an entity, provisioning status, or log message. For a
+  non-Supervisor installation, store the manual fallback URL in ESPHome
+  `secrets.yaml`.
 - The active pipeline may be selected in the URL. Invalid pipeline IDs or
   tokens are rejected before a Pipecat worker starts.
-

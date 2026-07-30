@@ -95,8 +95,28 @@ void VaPipecat::set_url(const std::string &url) {
   this->connect_();
 }
 
+void VaPipecat::provision_endpoint(std::string endpoint) {
+  static constexpr size_t kMaxEndpointLength = 2048;
+  if (!this->auto_provision_) {
+    ESP_LOGW(TAG, "Ignoring automatic endpoint provisioning because it is disabled");
+    return;
+  }
+  if (endpoint.empty() || endpoint.size() > kMaxEndpointLength ||
+      !(endpoint.rfind("ws://", 0) == 0 || endpoint.rfind("wss://", 0) == 0)) {
+    ESP_LOGW(TAG, "Rejected invalid Pipecat endpoint");
+    return;
+  }
+  this->set_url(endpoint);
+}
+
 void VaPipecat::setup() {
   ESP_LOGCONFIG(TAG, "Setting up VA Pipecat...");
+
+#ifdef USE_API_CUSTOM_SERVICES
+  if (this->auto_provision_) {
+    this->register_service(&VaPipecat::provision_endpoint, "provision_pipecat", {"endpoint"});
+  }
+#endif
 
   if (this->mic_source_ == nullptr || this->speaker_ == nullptr) {
     ESP_LOGE(TAG, "Microphone source and speaker are required");
@@ -201,6 +221,7 @@ void VaPipecat::setup() {
 void VaPipecat::dump_config() {
   ESP_LOGCONFIG(TAG, "VA Pipecat:");
   ESP_LOGCONFIG(TAG, "  Endpoint: %s", this->url_.empty() ? "not configured" : "configured");
+  ESP_LOGCONFIG(TAG, "  Automatic provisioning: %s", YESNO(this->auto_provision_));
   ESP_LOGCONFIG(TAG, "  Barge-in: %s", YESNO(this->barge_in_));
   ESP_LOGCONFIG(TAG, "  Playback buffer: %u bytes", (unsigned) this->audio_buf_bytes_);
   ESP_LOGCONFIG(TAG, "  Connected: %s", YESNO(this->ws_connected_));

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.77
+
+- Provision authenticated `va_pipecat` WebSocket endpoints automatically
+  through the native ESPHome API, without exposing the endpoint as an entity.
+- Discover compatible satellites through Home Assistant and periodically
+  re-provision them after device, add-on, or Home Assistant restarts.
+- Keep an explicit host override and the generated endpoint as a manual
+  fallback for networks where automatic address discovery is insufficient.
+
 ## 0.1.76
 
 - Add the product-ready ESPHome `va_pipecat` component and an authenticated,

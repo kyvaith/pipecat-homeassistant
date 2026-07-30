@@ -22,9 +22,9 @@ jobs:
       - name: Compile Python sources
         run: |
           python -m compileall addons/pipecat_assist/app custom_components/pipecat_assist
-      - name: Test ESPHome satellite protocol
+      - name: Test ESPHome integration
         run: |
-          python -m unittest tests.test_va_pipecat_protocol -v
+          python -m unittest discover -s tests -v
 
   docker:
     name: Docker build

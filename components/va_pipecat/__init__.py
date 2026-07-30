@@ -1,8 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome import automation
-from esphome.components import microphone, speaker
-from esphome.components import esp32
+from esphome import automation, final_validate as fv
+from esphome.components import api, esp32, microphone, speaker
 from esphome.const import (
     CONF_ID,
     CONF_ON_ERROR,
@@ -12,10 +11,11 @@ from esphome.const import (
 )
 
 CODEOWNERS = ["@kyvaith"]
-DEPENDENCIES = ["network", "microphone", "speaker", "psram"]
+DEPENDENCIES = ["api", "network", "microphone", "speaker", "psram"]
 
 CONF_MICROPHONE = "microphone"
 CONF_SPEAKER = "speaker"
+CONF_AUTO_PROVISION = "auto_provision"
 CONF_BARGE_IN = "barge_in"
 CONF_PLAYBACK_BUFFER_SIZE = "playback_buffer_size"
 CONF_ON_PHASE = "on_phase"
@@ -59,7 +59,8 @@ CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(VaPipecat),
-            cv.Required(CONF_URL): validate_websocket_url,
+            cv.Optional(CONF_URL, default=""): validate_websocket_url,
+            cv.Optional(CONF_AUTO_PROVISION, default=True): cv.boolean,
             cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
                 min_bits_per_sample=16,
                 max_bits_per_sample=16,
@@ -107,15 +108,31 @@ CONFIG_SCHEMA = cv.All(
     cv.only_with_framework("esp-idf"),
 )
 
-FINAL_VALIDATE_SCHEMA = cv.Schema(
-    {
-        cv.Required(
-            CONF_MICROPHONE
-        ): microphone.final_validate_microphone_source_schema(
-            "va_pipecat", sample_rate=16000
-        ),
-    },
-    extra=cv.ALLOW_EXTRA,
+
+def _final_validate(config):
+    if config[CONF_AUTO_PROVISION]:
+        api_config = fv.full_config.get().get("api")
+        if api_config is None or not api_config.get(api.CONF_CUSTOM_SERVICES, False):
+            raise cv.Invalid(
+                "auto_provision requires 'custom_services: true' in the api section"
+            )
+    elif not config[CONF_URL]:
+        raise cv.Invalid("url is required when auto_provision is disabled")
+    return config
+
+
+FINAL_VALIDATE_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.Required(
+                CONF_MICROPHONE
+            ): microphone.final_validate_microphone_source_schema(
+                "va_pipecat", sample_rate=16000
+            ),
+        },
+        extra=cv.ALLOW_EXTRA,
+    ),
+    _final_validate,
 )
 
 
@@ -130,6 +147,7 @@ async def to_code(config):
     await cg.register_component(var, config)
 
     cg.add(var.set_url(config[CONF_URL]))
+    cg.add(var.set_auto_provision(config[CONF_AUTO_PROVISION]))
     cg.add(var.set_barge_in(config[CONF_BARGE_IN]))
     cg.add(var.set_playback_buffer_size(config[CONF_PLAYBACK_BUFFER_SIZE]))
 

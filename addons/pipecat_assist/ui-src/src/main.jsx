@@ -148,7 +148,7 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
-const ASSISTANT_CARD_VERSION = "0.1.76";
+const ASSISTANT_CARD_VERSION = "0.1.77";
 const ASSISTANT_CARD_ACCENT_HEX = "#206cff";
 const ASSISTANT_CARD_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -6121,6 +6121,14 @@ function RuntimeView({
 }
 
 function EspHomeSatellitePanel({ config, copyEspHomeUrl, updateConfig }) {
+  const provisioning = config.esphome_provisioning || {};
+  const provisionedCount = Number(provisioning.provisioned_count || 0);
+  const provisioningMessage = provisioning.last_error
+    ? provisioning.last_error
+    : provisionedCount > 0
+      ? `${provisionedCount} compatible satellite${provisionedCount === 1 ? "" : "s"} provisioned automatically.`
+      : "Waiting for a compatible ESPHome satellite to connect to Home Assistant.";
+
   return (
     <>
       <div className="panel-head">
@@ -6132,15 +6140,15 @@ function EspHomeSatellitePanel({ config, copyEspHomeUrl, updateConfig }) {
       <div className="setup-callout">
         <Radio size={20} />
         <div>
-          <strong>Use this endpoint in the ESPHome va_pipecat component.</strong>
+          <strong>ESPHome endpoint provisioning is automatic.</strong>
           <span>
-            It contains the satellite secret. Treat the complete URL like a password and use a
-            Home Assistant LAN address reachable by the device.
+            {provisioningMessage} The authenticated URL is delivered through the native ESPHome
+            API and is never published as an entity.
           </span>
         </div>
       </div>
       <div className="satellite-endpoint">
-        <Field label="WebSocket endpoint" wide>
+        <Field label="Manual fallback endpoint" wide>
           <input readOnly spellCheck="false" value={config.esphome_ws_url || ""} />
         </Field>
         <Button icon={Copy} variant="secondary" onClick={copyEspHomeUrl}>
@@ -6148,7 +6156,7 @@ function EspHomeSatellitePanel({ config, copyEspHomeUrl, updateConfig }) {
         </Button>
       </div>
       <div className="form-grid satellite-settings">
-        <Field label="Device-reachable host" wide>
+        <Field label="Device-reachable host override" wide>
           <input
             spellCheck="false"
             placeholder="homeassistant.local or 192.168.1.10"

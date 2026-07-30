@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esphome/core/component.h"
+#include "esphome/components/api/custom_api_device.h"
 #include "esphome/components/microphone/microphone_source.h"
 #include "esphome/components/speaker/speaker.h"
 
@@ -23,9 +24,10 @@ class OnRepeatedFailureTrigger;
 class OnFollowupOpenedTrigger;
 class OnErrorTrigger;
 
-class VaPipecat : public Component {
+class VaPipecat : public Component, public api::CustomAPIDevice {
  public:
   void set_url(const std::string &url);
+  void set_auto_provision(bool enabled) { auto_provision_ = enabled; }
   void set_microphone_source(microphone::MicrophoneSource *m) { mic_source_ = m; }
   void set_speaker(speaker::Speaker *s) { speaker_ = s; }
   // When enabled, microphone audio continues through thinking and speaking so
@@ -67,6 +69,7 @@ class VaPipecat : public Component {
   void start_session();
   void send_interrupt();
   void end_session();
+  void provision_endpoint(std::string endpoint);
   // Called from yaml's on_followup_opened automation AFTER the chime has
   // finished announcing through the speaker (wait_until !is_announcing +
   // i2s tail). Opens the mic for kRequestFollowUpMs. No-op if the device
@@ -120,6 +123,7 @@ class VaPipecat : public Component {
   static constexpr TickType_t kWsMicSendTimeout = pdMS_TO_TICKS(10);
 
   std::string url_;
+  bool auto_provision_{true};
   microphone::MicrophoneSource *mic_source_{nullptr};
   speaker::Speaker *speaker_{nullptr};
   TaskHandle_t audio_task_handle_{nullptr};

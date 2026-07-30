@@ -92,6 +92,7 @@ from app.audio_debug import (
     create_audio_debug_session,
     list_audio_recordings,
 )
+from app.esphome_provisioner import ESPHomeProvisioner
 from app.mcp_bridge import (
     CombinedMCPBridge,
     check_mcp,
@@ -166,6 +167,11 @@ HA_LIVE_RESULT_TIMEOUT_SECONDS = 75
 HA_LIVE_TURNS_BY_TRANSCRIPT: dict[tuple[str, str], "HALiveTurn"] = {}
 HA_LIVE_TURNS_BY_SPEECH: dict[tuple[str, str], "HALiveTurn"] = {}
 HA_ASSIST_WARMUP_TASK: asyncio.Task | None = None
+ESPHOME_PROVISIONER = ESPHomeProvisioner(
+    STORE.load,
+    supervisor_url=SUPERVISOR_URL,
+    supervisor_token=os.getenv("SUPERVISOR_TOKEN", ""),
+)
 
 
 @dataclass
@@ -756,6 +762,7 @@ def _config_response(config: RuntimeConfig, request: Request) -> dict[str, Any]:
     data["runner_offer_path"] = _offer_path(config)
     data["esphome_ws_url"] = _esphome_ws_url(config, request)
     data["esphome_ws_path"] = _esphome_ws_path(config)
+    data["esphome_provisioning"] = ESPHOME_PROVISIONER.status()
     return data
 
 
@@ -901,6 +908,7 @@ async def api_get_config(request: Request):
 async def api_update_config(payload: dict[str, Any], request: Request):
     config = STORE.update_from_public(payload)
     _schedule_ha_assist_warmup(config, reason="config_update")
+    ESPHOME_PROVISIONER.request_scan()
     return _config_response(config, request)
 
 
@@ -3149,6 +3157,12 @@ def _schedule_ha_assist_warmup(
 @app.on_event("startup")
 async def _startup_warm_ha_assist() -> None:
     _schedule_ha_assist_warmup(reason="startup")
+    ESPHOME_PROVISIONER.start()
+
+
+@app.on_event("shutdown")
+async def _shutdown_esphome_provisioner() -> None:
+    await ESPHOME_PROVISIONER.stop()
 
 
 def _gemini_live_tool_declarations(tools_schema: ToolsSchema) -> dict[str, Any]:

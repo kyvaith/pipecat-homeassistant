@@ -182,9 +182,10 @@ flowchart LR
    speech-to-speech profiles and composed realtime profiles such as
    `Soniox + OpenAI + Cartesia`, `Deepgram + Gemini + Google TTS`, and
    `Speechmatics + AWS Nova Pro + ElevenLabs`.
-5. For ESPHome, open **Runtime > ESPHome satellite**, copy the authenticated
-   endpoint into `secrets.yaml`, and add the bundled `va_pipecat` external
-   component.
+5. For ESPHome, add the bundled `va_pipecat` external component and enable
+   `api.custom_services`. The add-on discovers and provisions the satellite
+   automatically. **Runtime > ESPHome satellite** also exposes a manual
+   fallback endpoint.
 
 Home Assistant MCP access uses the add-on's Supervisor token by default. Use
 **Integrations > Home Assistant MCP > Automatic defaults** to clear custom MCP
@@ -278,9 +279,12 @@ external_components:
   - source: github://kyvaith/pipecat-homeassistant@dev
     components: [va_pipecat]
 
+api:
+  custom_services: true
+
 va_pipecat:
   id: pipecat_va
-  url: !secret pipecat_satellite_url
+  auto_provision: true
   microphone:
     microphone: processed_microphone
     channels: 0
@@ -288,8 +292,9 @@ va_pipecat:
   barge_in: true
 ```
 
-Copy the complete authenticated URL from **Runtime > ESPHome satellite**. See
-[the component reference](components/va_pipecat/README.md) and
+The add-on resolves the Home Assistant LAN host and sends the authenticated URL
+through the device's native API action. No token-bearing text entity is
+created. See [the component reference](components/va_pipecat/README.md) and
 [architecture notes](docs/architecture/esphome-satellite.md) for the full
 configuration and conversation lifecycle.
 
