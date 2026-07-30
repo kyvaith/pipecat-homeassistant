@@ -214,8 +214,9 @@ class VaPipecatProtocol:
 
         if message_type in {"bot-output", "bot-tts-text"}:
             text = str(data.get("text") or "").strip()
-            if text and (not self.assistant_segments or self.assistant_segments[-1] != text):
-                self.assistant_segments.append(text)
+            if not text or (self.assistant_segments and self.assistant_segments[-1] == text):
+                return None
+            self.assistant_segments.append(text)
             return self.transcript_message("assistant", text, True)
 
         if message_type == "bot-interrupted":

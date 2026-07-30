@@ -20,6 +20,7 @@ from app.va_pipecat import (  # noqa: E402
 )
 from pipecat.frames.frames import (  # noqa: E402
     InputAudioRawFrame,
+    InterruptionFrame,
     InterruptionWorkerFrame,
     OutputAudioRawFrame,
     OutputTransportMessageUrgentFrame,
@@ -64,6 +65,9 @@ class VaPipecatTransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_device_interrupt_becomes_pipeline_interruption(self):
         frame = await self.serializer.deserialize('{"type":"interrupt"}')
         self.assertIsInstance(frame, InterruptionWorkerFrame)
+
+    async def test_pipeline_interruption_waits_for_semantic_rtvi_event(self):
+        self.assertIsNone(await self.serializer.serialize(InterruptionFrame()))
 
     def test_websocket_parameters_match_the_device_contract(self):
         params = websocket_transport_params(

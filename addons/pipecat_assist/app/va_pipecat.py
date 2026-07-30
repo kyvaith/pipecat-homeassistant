@@ -63,10 +63,10 @@ class VaPipecatFrameSerializer(FrameSerializer):
         self._probe_nonzero = 0
         self._probe_peak = 0
         self._probe_energy = 0
-        self._probe_logged = False
+        self._probe_window = 0
 
     def _probe_input_audio(self, data: bytes) -> None:
-        if self._probe_logged:
+        if self._probe_window >= 8:
             return
 
         samples = array.array("h")
@@ -86,22 +86,30 @@ class VaPipecatFrameSerializer(FrameSerializer):
 
         rms = math.sqrt(self._probe_energy / self._probe_samples)
         nonzero_pct = 100.0 * self._probe_nonzero / self._probe_samples
-        logger.info(
-            "ESPHome audio ingress: samples={} rate={}Hz peak={} rms={:.1f} nonzero={:.1f}%",
+        logger.debug(
+            "ESPHome audio ingress window={}: samples={} rate={}Hz peak={} rms={:.1f} nonzero={:.1f}%",
+            self._probe_window + 1,
             self._probe_samples,
             INPUT_SAMPLE_RATE,
             self._probe_peak,
             rms,
             nonzero_pct,
         )
-        self._probe_logged = True
+        self._probe_window += 1
+        self._probe_samples = 0
+        self._probe_nonzero = 0
+        self._probe_peak = 0
+        self._probe_energy = 0
 
     async def serialize(self, frame: Frame) -> str | bytes | None:
         if isinstance(frame, OutputAudioRawFrame):
             return frame.audio
 
         if isinstance(frame, InterruptionFrame):
-            return self.protocol.interrupt_message("pipeline")
+            # The RTVI observer emits bot-interrupted for this same pipeline
+            # event and has enough context to distinguish barge-in from an
+            # explicit stop. Serializing both produced duplicate interrupts.
+            return None
 
         if isinstance(frame, (EndFrame, CancelFrame)):
             return self.protocol.phase_message("idle", terminal=True)

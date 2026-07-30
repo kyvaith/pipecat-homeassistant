@@ -79,6 +79,18 @@ class VaPipecatProtocolTests(unittest.TestCase):
         self.assertEqual(wire["role"], "user")
         self.assertTrue(wire["final"])
 
+    def test_duplicate_assistant_text_from_rtvi_observers_is_suppressed(self):
+        first = self.protocol.on_rtvi_message(
+            self.rtvi("bot-output", {"text": "Dzie\u0144 dobry"})
+        )
+        duplicate = self.protocol.on_rtvi_message(
+            self.rtvi("bot-tts-text", {"text": "Dzie\u0144 dobry"})
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(duplicate)
+        self.assertEqual(self.protocol.assistant_segments, ["Dzie\u0144 dobry"])
+
     def test_terminal_reply_enters_thanks_instead_of_follow_up(self):
         protocol = VaPipecatProtocol(lambda *_texts: True)
         protocol.client_action('{"type":"wake"}')

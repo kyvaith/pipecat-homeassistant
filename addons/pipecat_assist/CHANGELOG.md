@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.79
+
+- Seed the Gemini Live context for ESPHome satellites without generating an
+  unsolicited greeting, so the service accepts streamed microphone PCM from
+  the first wake-word turn.
+- Use local Silero VAD as the sole turn detector for Gemini ESPHome sessions,
+  avoiding competing server-side VAD boundaries and duplicate interruptions.
+- Suppress duplicate pipeline interrupt and assistant transcript events sent by
+  overlapping Pipecat observers.
+- Treat scheduled Gemini Live session renewal after a stable connection as a
+  reconnect instead of accumulating it toward the fatal failure limit.
+- Keep multi-window PCM level diagnostics available at debug log level.
+
 ## 0.1.78
 
 - Add local Silero VAD turn boundaries for Gemini Live ESPHome satellites so

@@ -4402,11 +4402,17 @@ def _gemini_voice(flow: FlowConfig, integration: IntegrationConfig | None) -> st
     return DEFAULT_GEMINI_LIVE_VOICE
 
 
-def _gemini_vad(flow: FlowConfig):
+def _gemini_vad(flow: FlowConfig, *, local_turn_detection: bool = False):
     try:
         from pipecat.services.google.gemini_live.llm import GeminiVADParams
     except ImportError:
         from pipecat.services.google.gemini_live import GeminiVADParams
+
+    if local_turn_detection:
+        # Local Silero VAD emits the activity_start/activity_end markers. Leaving
+        # Gemini server VAD enabled at the same time creates two competing turn
+        # detectors and duplicate interruptions.
+        return GeminiVADParams(disabled=True)
 
     silence_by_eagerness = {
         "high": 300,
@@ -4431,10 +4437,10 @@ def _composed_vad_analyzer(flow: FlowConfig):
     }
     return SileroVADAnalyzer(
         params=VADParams(
-            confidence=0.5,
-            start_secs=0.05,
+            confidence=0.7,
+            start_secs=0.12,
             stop_secs=stop_secs_by_eagerness.get(flow.vad_eagerness, 0.45),
-            min_volume=0.05,
+            min_volume=0.02,
         )
     )
 
@@ -4445,11 +4451,47 @@ def _gemini_live_service(
     model: str,
     flow: FlowConfig,
     integration: IntegrationConfig | None,
+    local_turn_detection: bool = False,
+    inference_on_context_initialization: bool = True,
 ):
     try:
         from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
     except ImportError:
         from pipecat.services.google.gemini_live import GeminiLiveLLMService
+
+    class ResilientGeminiLiveLLMService(GeminiLiveLLMService):
+        """Do not count a normal long-lived session renewal as a rapid failure."""
+
+        async def _handle_user_started_speaking(self, frame):
+            logger.debug(
+                "Gemini local turn start: vad_disabled={} ready={} session={}",
+                getattr(self, "_vad_disabled", False),
+                getattr(self, "_ready_for_realtime_input", False),
+                bool(getattr(self, "_session", None)),
+            )
+            await super()._handle_user_started_speaking(frame)
+
+        async def _handle_user_stopped_speaking(self, frame):
+            logger.debug(
+                "Gemini local turn stop: vad_disabled={} ready={} session={}",
+                getattr(self, "_vad_disabled", False),
+                getattr(self, "_ready_for_realtime_input", False),
+                bool(getattr(self, "_session", None)),
+            )
+            await super()._handle_user_stopped_speaking(frame)
+
+        async def _handle_connection_error(self, error: Exception) -> bool:
+            connection_started = getattr(self, "_connection_start_time", None)
+            if (
+                connection_started
+                and time.time() - connection_started >= 30.0
+                and getattr(self, "_consecutive_failures", 0)
+            ):
+                logger.info(
+                    "Gemini connection was stable before renewal; resetting failure counter"
+                )
+                self._consecutive_failures = 0
+            return await super()._handle_connection_error(error)
 
     settings_kwargs: dict[str, Any] = {
         "model": _gemini_model(model),
@@ -4458,13 +4500,17 @@ def _gemini_live_service(
         "language": _runtime_language(flow, integration) or "en-US",
     }
     if _enabled_step(flow, "vad"):
-        settings_kwargs["vad"] = _gemini_vad(flow)
+        settings_kwargs["vad"] = _gemini_vad(
+            flow,
+            local_turn_detection=local_turn_detection,
+        )
     if flow.max_output_tokens:
         settings_kwargs["max_tokens"] = flow.max_output_tokens
 
-    return GeminiLiveLLMService(
+    return ResilientGeminiLiveLLMService(
         api_key=api_key,
-        settings=GeminiLiveLLMService.Settings(**settings_kwargs),
+        settings=ResilientGeminiLiveLLMService.Settings(**settings_kwargs),
+        inference_on_context_initialization=inference_on_context_initialization,
     )
 
 
@@ -4941,6 +4987,8 @@ async def run_bot(
                 model=realtime_model,
                 flow=flow,
                 integration=integration,
+                local_turn_detection=bool(_enabled_step(flow, "vad")),
+                inference_on_context_initialization=not is_esphome_satellite,
             )
         else:
             realtime_model = _model_name(flow, integration, provider_kind)
@@ -4982,7 +5030,7 @@ async def run_bot(
         )
         context_for_memory = context
         user_params = None
-        if provider_kind == "gemini":
+        if provider_kind == "gemini" and _enabled_step(flow, "vad"):
             from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
             from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
@@ -5029,7 +5077,7 @@ async def run_bot(
             logger.info("Client connected to flow {}", flow.id)
             if _flow_enabled(flow):
                 logger.warning("Pipecat Flows are ignored for speech-to-speech runtime {}", provider_kind)
-            if flow.greeting.strip() and not is_esphome_satellite:
+            if is_esphome_satellite or flow.greeting.strip():
                 await worker.queue_frames([LLMRunFrame()])
 
         @transport.event_handler("on_client_disconnected")
