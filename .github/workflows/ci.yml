@@ -24,7 +24,7 @@ jobs:
           python -m compileall addons/pipecat_assist/app custom_components/pipecat_assist
       - name: Install lightweight test dependencies
         run: |
-          python -m pip install "httpx>=0.28,<1"
+          python -m pip install "httpx>=0.28,<1" "loguru>=0.7,<1"
       - name: Test ESPHome integration
         run: |
           python -m unittest \
