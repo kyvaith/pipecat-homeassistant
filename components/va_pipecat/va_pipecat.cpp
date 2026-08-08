@@ -408,6 +408,8 @@ void VaPipecat::mic_tx_task_() {
 }
 
 void VaPipecat::loop() {
+  this->publish_audio_levels_();
+
   if (this->streaming_ && this->mic_source_ != nullptr) {
     const uint32_t now = millis();
     const uint32_t last_frame = this->mic_last_frame_ms_;
@@ -942,6 +944,8 @@ void VaPipecat::handle_binary_(const uint8_t *data, size_t len) {
     }
     // len is unchanged (pairs * 2 == len rounded down; trailing odd byte ignored).
     len = pairs * 2;
+    this->update_audio_level_(this->output_level_q15_, reinterpret_cast<const int16_t *>(data), pairs, 4);
+    this->last_output_audio_ms_ = now_ms;
   }
   // Two-part write: from tail to end, then wrap to start.
   // We need a stable snapshot of audio_tail_ for the memcpy destination,
@@ -999,6 +1003,9 @@ void VaPipecat::on_mic_data_(const std::vector<uint8_t> &samples) {
   if (!this->streaming_) {
     return;
   }
+
+  this->update_audio_level_(this->input_level_q15_, mono_samples, mono_sample_count, 4);
+  this->last_input_audio_ms_ = now_ms;
 
   uint32_t max_abs = 0;
   for (size_t i = 0; i < mono_sample_count; i += 4) {
@@ -1665,6 +1672,69 @@ void VaPipecat::fire_transcript_(const std::string &role, const std::string &tex
       t->trigger(role_copy, text_copy);
     }
   });
+}
+
+void VaPipecat::update_audio_level_(std::atomic<uint16_t> &target, const int16_t *samples, size_t sample_count,
+                                    size_t step) {
+  if (samples == nullptr || sample_count == 0)
+    return;
+  if (step == 0)
+    step = 1;
+
+  uint64_t absolute_sum = 0;
+  uint32_t peak = 0;
+  size_t measured = 0;
+  for (size_t index = 0; index < sample_count; index += step) {
+    const int32_t sample = samples[index];
+    const uint32_t absolute = sample < 0 ? static_cast<uint32_t>(-sample) : static_cast<uint32_t>(sample);
+    absolute_sum += absolute;
+    peak = std::max(peak, absolute);
+    measured++;
+  }
+  if (measured == 0)
+    return;
+
+  const uint32_t mean = static_cast<uint32_t>(absolute_sum / measured);
+  // Mean absolute amplitude is stable enough for animation while the small
+  // peak contribution keeps consonants visible. The gain maps ordinary speech
+  // into the useful middle of Q15 without a costly FFT or square root.
+  const uint32_t envelope = ((mean * 3U + peak) / 4U) * 8U;
+  target.store(static_cast<uint16_t>(std::min<uint32_t>(32767U, envelope)), std::memory_order_relaxed);
+}
+
+void VaPipecat::publish_audio_levels_() {
+  if (this->audio_level_triggers_.empty())
+    return;
+
+  const uint32_t now = millis();
+  if (now - this->last_audio_level_publish_ms_ < kAudioLevelPublishIntervalMs)
+    return;
+  this->last_audio_level_publish_ms_ = now;
+
+  const uint32_t last_input_audio_ms = this->last_input_audio_ms_.load(std::memory_order_relaxed);
+  const uint32_t last_output_audio_ms = this->last_output_audio_ms_.load(std::memory_order_relaxed);
+  const uint16_t input_target =
+      now - last_input_audio_ms <= 100 ? this->input_level_q15_.load(std::memory_order_relaxed) : 0;
+  const uint16_t output_target =
+      now - last_output_audio_ms <= 100 ? this->output_level_q15_.load(std::memory_order_relaxed) : 0;
+
+  const auto smooth = [](uint16_t current, uint16_t target) -> uint16_t {
+    const int32_t delta = static_cast<int32_t>(target) - current;
+    const int32_t divisor = delta >= 0 ? 3 : 6;
+    const int32_t next = static_cast<int32_t>(current) + delta / divisor;
+    return static_cast<uint16_t>(std::max<int32_t>(0, std::min<int32_t>(32767, next)));
+  };
+  this->published_input_level_q15_ = smooth(this->published_input_level_q15_, input_target);
+  this->published_output_level_q15_ = smooth(this->published_output_level_q15_, output_target);
+
+  const auto phase = static_cast<Phase>(this->current_phase_.load(std::memory_order_relaxed));
+  if (phase == Phase::IDLE && this->published_input_level_q15_ < 8 && this->published_output_level_q15_ < 8)
+    return;
+
+  const float input_level = static_cast<float>(this->published_input_level_q15_) / 32767.0f;
+  const float output_level = static_cast<float>(this->published_output_level_q15_) / 32767.0f;
+  for (auto *trigger : this->audio_level_triggers_)
+    trigger->trigger(input_level, output_level);
 }
 
 void VaPipecat::fire_error_(const std::string &code, const std::string &message) {

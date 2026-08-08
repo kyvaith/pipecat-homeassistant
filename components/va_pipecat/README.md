@@ -56,6 +56,12 @@ va_pipecat:
         format: "%s: %s"
         args: [role.c_str(), text.c_str()]
 
+  on_audio_level:
+    - lambda: |-
+        // Both values are normalized to 0.0-1.0. Use input while listening
+        // and output while speaking to drive a lightweight voice visualizer.
+        id(voice_visualizer).set_levels(input_level, output_level);
+
   on_error:
     - logger.log:
         level: ERROR
@@ -94,6 +100,11 @@ button:
   assistant audio. Valid range: 64 kB to 4 MB.
 - **`on_phase`**: receives the canonical phase string.
 - **`on_transcript`**: receives `role` (`user` or `assistant`) and `text`.
+- **`on_audio_level`**: receives normalized `input_level` and `output_level`
+  values at up to 30 Hz. The component derives a low-cost PCM envelope after
+  microphone channel selection and after assistant output volume scaling. It
+  uses attack/release smoothing and emits zero after a silent source timeout;
+  it does not run an FFT or allocate from an audio callback.
 - **`on_error`**: receives a stable error `code` and a human-readable
   `message`.
 - **`on_repeated_failure`**: fires after repeated WebSocket reconnect failures.

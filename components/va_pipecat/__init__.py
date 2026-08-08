@@ -20,6 +20,7 @@ CONF_BARGE_IN = "barge_in"
 CONF_PLAYBACK_BUFFER_SIZE = "playback_buffer_size"
 CONF_ON_PHASE = "on_phase"
 CONF_ON_TRANSCRIPT = "on_transcript"
+CONF_ON_AUDIO_LEVEL = "on_audio_level"
 CONF_ON_REPEATED_FAILURE = "on_repeated_failure"
 CONF_ON_FOLLOWUP_OPENED = "on_followup_opened"
 
@@ -38,6 +39,9 @@ OnPhaseTrigger = va_pipecat_ns.class_(
 )
 OnTranscriptTrigger = va_pipecat_ns.class_(
     "OnTranscriptTrigger", automation.Trigger.template(cg.std_string, cg.std_string)
+)
+OnAudioLevelTrigger = va_pipecat_ns.class_(
+    "OnAudioLevelTrigger", automation.Trigger.template(cg.float_, cg.float_)
 )
 OnRepeatedFailureTrigger = va_pipecat_ns.class_(
     "OnRepeatedFailureTrigger", automation.Trigger.template()
@@ -81,6 +85,13 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_ON_TRANSCRIPT): automation.validate_automation(
                 {
                     cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(OnTranscriptTrigger),
+                }
+            ),
+            cv.Optional(CONF_ON_AUDIO_LEVEL): automation.validate_automation(
+                {
+                    cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(
+                        OnAudioLevelTrigger
+                    ),
                 }
             ),
             cv.Optional(CONF_ON_REPEATED_FAILURE): automation.validate_automation(
@@ -172,6 +183,14 @@ async def to_code(config):
         await automation.build_automation(
             trigger,
             [(cg.std_string, "role"), (cg.std_string, "text")],
+            conf,
+        )
+
+    for conf in config.get(CONF_ON_AUDIO_LEVEL, []):
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
+        await automation.build_automation(
+            trigger,
+            [(cg.float_, "input_level"), (cg.float_, "output_level")],
             conf,
         )
 

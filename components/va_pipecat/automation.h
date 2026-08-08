@@ -18,6 +18,11 @@ class OnTranscriptTrigger : public Trigger<std::string, std::string> {
   explicit OnTranscriptTrigger(VaPipecat *parent) { parent->add_on_transcript_trigger(this); }
 };
 
+class OnAudioLevelTrigger : public Trigger<float, float> {
+ public:
+  explicit OnAudioLevelTrigger(VaPipecat *parent) { parent->add_on_audio_level_trigger(this); }
+};
+
 class OnRepeatedFailureTrigger : public Trigger<> {
  public:
   explicit OnRepeatedFailureTrigger(VaPipecat *parent) {

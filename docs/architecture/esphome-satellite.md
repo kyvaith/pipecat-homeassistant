@@ -28,12 +28,14 @@ pacing on the Home Assistant host.
 ```mermaid
 flowchart LR
     Mic["ESPHome microphone source\nPCM16 mono 16 kHz"] --> Tx["Non-blocking uplink ring"]
+    Mic --> InputEnvelope["Input PCM envelope\nnormalized 0.0-1.0"]
     Tx --> WS["Authenticated WebSocket"]
     WS --> Transport["Pipecat FastAPI transport"]
     Transport --> Pipeline["Selected Pipecat pipeline"]
     Pipeline --> Transport
     Transport -->|"Paced PCM16 mono 24 kHz"| WS
     WS --> Jitter["PSRAM playback buffer"]
+    WS --> OutputEnvelope["Output PCM envelope\nnormalized 0.0-1.0"]
     Jitter --> Drain["Dedicated playback task"]
     Drain --> Speaker["ESPHome speaker graph"]
 ```
@@ -44,6 +46,10 @@ flowchart LR
 - The device uses a configurable PSRAM jitter buffer and drains it outside the
   ESPHome main loop, isolating audio from display or artwork stalls.
 - Interrupt frames flush queued assistant PCM before the next user utterance.
+- Input and output envelopes are sampled without allocation and published to
+  ESPHome automations at up to 30 Hz. This gives device UIs speech-reactive
+  motion without coupling their renderer to an audio callback or duplicating
+  PCM buffers.
 
 ## Control plane
 
