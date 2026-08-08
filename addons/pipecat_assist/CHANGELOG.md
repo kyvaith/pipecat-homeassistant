@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.80
+
+- Coalesce streaming user and assistant transcript tokens into cumulative
+  phrases before sending them to ESPHome satellites, avoiding word-by-word UI
+  redraws while keeping live captions responsive.
+- Deliver a pending final assistant phrase together with the terminal or
+  follow-up phase transition so short unpunctuated replies cannot lose either
+  their final text or their conversation state.
+- Prefer higher-quality assistant transcript sources when overlapping RTVI
+  observers publish the same turn.
+
 ## 0.1.79
 
 - Seed the Gemini Live context for ESPHome satellites without generating an

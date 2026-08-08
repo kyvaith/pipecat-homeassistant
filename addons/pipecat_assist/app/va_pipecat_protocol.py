@@ -10,6 +10,8 @@ from typing import Any
 
 PROTOCOL_NAME = "va-pipecat"
 PROTOCOL_VERSION = 1
+USER_PHRASE_WORDS = 4
+ASSISTANT_PHRASE_WORDS = 6
 
 
 def _compact_json(payload: dict[str, Any]) -> str:
@@ -18,6 +20,39 @@ def _compact_json(payload: dict[str, Any]) -> str:
 
 def _encoded_text(text: str) -> str:
     return base64.b64encode(text.encode("utf-8")).decode("ascii")
+
+
+def _normalize_text(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _merge_stream_text(previous: str, fragment: str) -> str:
+    """Merge cumulative and tokenized transcript events without duplication."""
+
+    previous = _normalize_text(previous)
+    fragment = _normalize_text(fragment)
+    if not fragment:
+        return previous
+    if not previous or fragment.startswith(previous):
+        return fragment
+    if previous.startswith(fragment) or previous.endswith(fragment):
+        return previous
+
+    max_overlap = min(len(previous), len(fragment))
+    for overlap in range(max_overlap, 0, -1):
+        if previous[-overlap:] == fragment[:overlap]:
+            return previous + fragment[overlap:]
+
+    separator = "" if fragment[0] in ",.;:!?)]}" else " "
+    return previous + separator + fragment
+
+
+def _phrase_ready(text: str, emitted: str, word_limit: int) -> bool:
+    if not text or text == emitted:
+        return False
+    if text.rstrip().endswith((".", "!", "?", ";", ":", "\n")):
+        return True
+    return len(text.split()) - len(emitted.split()) >= word_limit
 
 
 @dataclass
@@ -37,7 +72,12 @@ class VaPipecatProtocol:
     stop_requested: bool = False
     current_phase: str = "idle"
     last_user_text: str = ""
+    user_text: str = ""
+    user_emitted_text: str = ""
     assistant_segments: list[str] = field(default_factory=list)
+    assistant_text: str = ""
+    assistant_emitted_text: str = ""
+    assistant_priority: int = 0
     active_tool_calls: set[str] = field(default_factory=set)
     tool_start_pending: bool = False
 
@@ -85,7 +125,12 @@ class VaPipecatProtocol:
             self.stop_requested = False
             self.current_phase = "listening"
             self.last_user_text = ""
+            self.user_text = ""
+            self.user_emitted_text = ""
             self.assistant_segments.clear()
+            self.assistant_text = ""
+            self.assistant_emitted_text = ""
+            self.assistant_priority = 0
             self.active_tool_calls.clear()
             self.tool_start_pending = False
             return "wake"
@@ -142,21 +187,32 @@ class VaPipecatProtocol:
             }
         )
 
-    def transcript_message(self, role: str, text: str, final: bool) -> str | None:
+    def transcript_message(
+        self,
+        role: str,
+        text: str,
+        final: bool,
+        *,
+        phase: str | None = None,
+        **extra: Any,
+    ) -> str | None:
         """Encode a non-empty live transcript."""
 
         clean = text.strip()
         if not clean:
             return None
-        return _compact_json(
-            {
-                "type": "transcript",
-                "role": role,
-                "final": final,
-                "text_b64": _encoded_text(clean),
-                "turn_id": self.turn_id,
-            }
-        )
+        payload: dict[str, Any] = {
+            "type": "transcript",
+            "role": role,
+            "final": final,
+            "text_b64": _encoded_text(clean),
+            "turn_id": self.turn_id,
+        }
+        if phase is not None:
+            self.current_phase = phase
+            payload["phase"] = phase
+        payload.update(extra)
+        return _compact_json(payload)
 
     def on_rtvi_message(self, message: dict[str, Any]) -> str | None:
         """Translate one RTVI observer message to the satellite protocol."""
@@ -171,17 +227,32 @@ class VaPipecatProtocol:
         if message_type in {"user-started-speaking", "vad-user-started-speaking"}:
             self.active = True
             self.stop_requested = False
+            self.user_text = ""
+            self.user_emitted_text = ""
             self.assistant_segments.clear()
+            self.assistant_text = ""
+            self.assistant_emitted_text = ""
+            self.assistant_priority = 0
             return self.phase_message("listening")
 
         if message_type in {"user-stopped-speaking", "vad-user-stopped-speaking"}:
             return self.phase_message("thinking")
 
         if message_type == "user-transcription":
-            text = str(data.get("text") or "")
-            if data.get("final"):
-                self.last_user_text = text.strip()
-            return self.transcript_message("user", text, bool(data.get("final")))
+            self.user_text = _merge_stream_text(self.user_text, str(data.get("text") or ""))
+            final = bool(data.get("final"))
+            if final:
+                self.last_user_text = self.user_text
+            if not final and not _phrase_ready(
+                self.user_text,
+                self.user_emitted_text,
+                USER_PHRASE_WORDS,
+            ):
+                return None
+            if self.user_text == self.user_emitted_text:
+                return None
+            self.user_emitted_text = self.user_text
+            return self.transcript_message("user", self.user_text, final)
 
         if message_type in {
             "bot-llm-started",
@@ -212,12 +283,34 @@ class VaPipecatProtocol:
         if message_type == "bot-started-speaking":
             return self.phase_message("speaking")
 
-        if message_type in {"bot-output", "bot-tts-text"}:
+        if message_type in {
+            "bot-output",
+            "bot-transcription",
+            "bot-tts-text",
+            "bot-llm-text",
+        }:
             text = str(data.get("text") or "").strip()
-            if not text or (self.assistant_segments and self.assistant_segments[-1] == text):
+            priority = {
+                "bot-output": 4,
+                "bot-transcription": 3,
+                "bot-tts-text": 2,
+                "bot-llm-text": 1,
+            }[message_type]
+            if not text or priority < self.assistant_priority:
                 return None
+            if self.assistant_segments and self.assistant_segments[-1] == text:
+                return None
+            self.assistant_priority = max(self.assistant_priority, priority)
             self.assistant_segments.append(text)
-            return self.transcript_message("assistant", text, True)
+            self.assistant_text = _merge_stream_text(self.assistant_text, text)
+            if not _phrase_ready(
+                self.assistant_text,
+                self.assistant_emitted_text,
+                ASSISTANT_PHRASE_WORDS,
+            ):
+                return None
+            self.assistant_emitted_text = self.assistant_text
+            return self.transcript_message("assistant", self.assistant_text, False)
 
         if message_type == "bot-interrupted":
             self.active_tool_calls.clear()
@@ -231,13 +324,24 @@ class VaPipecatProtocol:
         if message_type == "bot-stopped-speaking":
             if self.active_tool_calls or self.tool_start_pending:
                 return self.phase_message("thinking")
-            assistant_text = " ".join(self.assistant_segments).strip()
+            assistant_text = self.assistant_text
             terminal = self.stop_requested or self.should_end_conversation(
                 self.last_user_text,
                 assistant_text,
             )
             self.active = not terminal
             self.stop_requested = False
+            next_phase = "thanks" if terminal else "listening"
+            phase_extra = {"terminal": True} if terminal else {"follow_up": True}
+            if assistant_text and assistant_text != self.assistant_emitted_text:
+                self.assistant_emitted_text = assistant_text
+                return self.transcript_message(
+                    "assistant",
+                    assistant_text,
+                    True,
+                    phase=next_phase,
+                    **phase_extra,
+                )
             if terminal:
                 return self.phase_message("thanks", terminal=True)
             return self.phase_message("listening", follow_up=True)

@@ -70,6 +70,14 @@ Text WebSocket messages are compact JSON. Protocol version 1 defines:
 The component accepts `replying` as a compatibility alias but emits
 `speaking`.
 
+Transcript events contain cumulative phrase text rather than individual model
+tokens. User partials are emitted at bounded word intervals or final STT
+boundaries; assistant text is emitted at punctuation or bounded phrase
+intervals. If a reply ends before the next boundary, its final transcript and
+the `listening`/`thanks` phase share one JSON message. This keeps constrained
+display clients responsive without losing the last words or requiring a second
+WebSocket round trip.
+
 ## State ownership
 
 Pipecat owns semantic conversation state. The device owns physical playback

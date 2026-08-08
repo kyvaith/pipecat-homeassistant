@@ -99,7 +99,10 @@ button:
 - **`playback_buffer_size`** (optional, default `2MB`): PSRAM jitter buffer for
   assistant audio. Valid range: 64 kB to 4 MB.
 - **`on_phase`**: receives the canonical phase string.
-- **`on_transcript`**: receives `role` (`user` or `assistant`) and `text`.
+- **`on_transcript`**: receives `role` (`user` or `assistant`) and cumulative
+  phrase text. The server coalesces token streams at punctuation, bounded word
+  intervals, and final transcription boundaries so display clients do not
+  redraw for every model token.
 - **`on_audio_level`**: receives normalized `input_level` and `output_level`
   values at up to 30 Hz. The component derives a low-cost PCM envelope after
   microphone channel selection and after assistant output volume scaling. It

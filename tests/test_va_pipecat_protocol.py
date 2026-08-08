@@ -81,15 +81,80 @@ class VaPipecatProtocolTests(unittest.TestCase):
 
     def test_duplicate_assistant_text_from_rtvi_observers_is_suppressed(self):
         first = self.protocol.on_rtvi_message(
-            self.rtvi("bot-output", {"text": "Dzie\u0144 dobry"})
+            self.rtvi("bot-output", {"text": "Dzie\u0144 dobry."})
         )
         duplicate = self.protocol.on_rtvi_message(
-            self.rtvi("bot-tts-text", {"text": "Dzie\u0144 dobry"})
+            self.rtvi("bot-tts-text", {"text": "Dzie\u0144 dobry."})
         )
 
         self.assertIsNotNone(first)
         self.assertIsNone(duplicate)
-        self.assertEqual(self.protocol.assistant_segments, ["Dzie\u0144 dobry"])
+        self.assertEqual(self.protocol.assistant_segments, ["Dzie\u0144 dobry."])
+
+    def test_assistant_word_stream_is_emitted_as_a_cumulative_phrase(self):
+        words = ["To", "jest", "odpowied\u017a", "wysy\u0142ana", "pe\u0142nymi", "frazami"]
+        for word in words[:-1]:
+            self.assertIsNone(
+                self.protocol.on_rtvi_message(self.rtvi("bot-output", {"text": word}))
+            )
+
+        message = json.loads(
+            self.protocol.on_rtvi_message(
+                self.rtvi("bot-output", {"text": words[-1]})
+            )
+        )
+        decoded = base64.b64decode(message["text_b64"]).decode("utf-8")
+        self.assertEqual(decoded, " ".join(words))
+        self.assertFalse(message["final"])
+
+    def test_short_final_assistant_phrase_shares_message_with_follow_up(self):
+        self.protocol.client_action('{"type":"wake"}')
+        self.assertIsNone(
+            self.protocol.on_rtvi_message(
+                self.rtvi("bot-output", {"text": "Jasne, pomog\u0119"})
+            )
+        )
+
+        message = json.loads(
+            self.protocol.on_rtvi_message(self.rtvi("bot-stopped-speaking"))
+        )
+        decoded = base64.b64decode(message["text_b64"]).decode("utf-8")
+        self.assertEqual(decoded, "Jasne, pomog\u0119")
+        self.assertTrue(message["final"])
+        self.assertEqual(message["phase"], "listening")
+        self.assertTrue(message["follow_up"])
+
+    def test_user_partial_transcripts_are_coalesced_until_a_phrase_boundary(self):
+        self.assertIsNone(
+            self.protocol.on_rtvi_message(
+                self.rtvi(
+                    "user-transcription",
+                    {"text": "Jak b\u0119dzie", "final": False},
+                )
+            )
+        )
+        partial = json.loads(
+            self.protocol.on_rtvi_message(
+                self.rtvi(
+                    "user-transcription",
+                    {"text": "Jak b\u0119dzie dzi\u015b wieczorem", "final": False},
+                )
+            )
+        )
+        decoded = base64.b64decode(partial["text_b64"]).decode("utf-8")
+        self.assertEqual(decoded, "Jak b\u0119dzie dzi\u015b wieczorem")
+
+        final = json.loads(
+            self.protocol.on_rtvi_message(
+                self.rtvi(
+                    "user-transcription",
+                    {"text": "Jak b\u0119dzie dzi\u015b wieczorem?", "final": True},
+                )
+            )
+        )
+        decoded = base64.b64decode(final["text_b64"]).decode("utf-8")
+        self.assertEqual(decoded, "Jak b\u0119dzie dzi\u015b wieczorem?")
+        self.assertTrue(final["final"])
 
     def test_terminal_reply_enters_thanks_instead_of_follow_up(self):
         protocol = VaPipecatProtocol(lambda *_texts: True)

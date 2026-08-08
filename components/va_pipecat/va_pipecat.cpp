@@ -760,7 +760,9 @@ void VaPipecat::handle_text_(const char *data, size_t len) {
     if (!text.empty()) {
       this->fire_transcript_(role, text);
     }
-    return;
+    // A final phrase can share this wire message with the phase transition.
+    // Continue parsing so the device cannot lose either the last words or the
+    // follow-up/terminal state at the end of a reply.
   }
 
   if (msg.find("\"type\":\"request_follow_up\"") != std::string::npos) {
