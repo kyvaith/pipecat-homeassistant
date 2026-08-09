@@ -91,6 +91,64 @@ class VaPipecatProtocolTests(unittest.TestCase):
         self.assertIsNone(duplicate)
         self.assertEqual(self.protocol.assistant_segments, ["Dzie\u0144 dobry."])
 
+    def test_higher_priority_observer_replaces_instead_of_appending(self):
+        self.assertIsNotNone(
+            self.protocol.on_rtvi_message(
+                self.rtvi(
+                    "bot-tts-text",
+                    {"text": "Dzie\u0144 dobry, w czym mog\u0119 pom\u00f3c?"},
+                )
+            )
+        )
+
+        replacement = self.protocol.on_rtvi_message(
+            self.rtvi(
+                "bot-output",
+                {"text": "Dzie\u0144 dobry. W czym mog\u0119 pom\u00f3c?"},
+            )
+        )
+
+        self.assertIsNotNone(replacement)
+        wire = json.loads(replacement)
+        decoded = base64.b64decode(wire["text_b64"]).decode("utf-8")
+        self.assertEqual(decoded, "Dzie\u0144 dobry. W czym mog\u0119 pom\u00f3c?")
+        self.assertNotIn("pom\u00f3c? Dzie\u0144", decoded)
+
+    def test_lower_priority_late_fragment_cannot_duplicate_selected_reply(self):
+        first = self.protocol.on_rtvi_message(
+            self.rtvi("bot-output", {"text": "To jest pe\u0142na odpowied\u017a."})
+        )
+        late = self.protocol.on_rtvi_message(
+            self.rtvi("bot-tts-text", {"text": "To jest pe\u0142na"})
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(late)
+        self.assertEqual(self.protocol.assistant_text, "To jest pe\u0142na odpowied\u017a.")
+
+    def test_priority_upgrade_waits_for_cumulative_source_to_catch_up(self):
+        self.assertIsNotNone(
+            self.protocol.on_rtvi_message(
+                self.rtvi("bot-tts-text", {"text": "To jest d\u0142uga odpowied\u017a testowa."})
+            )
+        )
+        self.assertIsNone(
+            self.protocol.on_rtvi_message(self.rtvi("bot-output", {"text": "To"}))
+        )
+        self.assertEqual(self.protocol.assistant_text, "To jest d\u0142uga odpowied\u017a testowa.")
+
+        replacement = self.protocol.on_rtvi_message(
+            self.rtvi(
+                "bot-output",
+                {"text": "To jest d\u0142uga odpowied\u017a testowa, poprawiona."},
+            )
+        )
+        self.assertIsNotNone(replacement)
+        self.assertEqual(
+            self.protocol.assistant_text,
+            "To jest d\u0142uga odpowied\u017a testowa, poprawiona.",
+        )
+
     def test_assistant_word_stream_is_emitted_as_a_cumulative_phrase(self):
         words = ["To", "jest", "odpowied\u017a", "wysy\u0142ana", "pe\u0142nymi", "frazami"]
         for word in words[:-1]:

@@ -10,6 +10,9 @@
   their final text or their conversation state.
 - Prefer higher-quality assistant transcript sources when overlapping RTVI
   observers publish the same turn.
+- Accumulate overlapping RTVI assistant observers independently and switch the
+  displayed reply by source priority, preventing duplicated clauses when their
+  chunk boundaries or punctuation differ.
 
 ## 0.1.79
 

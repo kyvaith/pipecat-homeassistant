@@ -75,6 +75,8 @@ class VaPipecatProtocol:
     user_text: str = ""
     user_emitted_text: str = ""
     assistant_segments: list[str] = field(default_factory=list)
+    assistant_source_texts: dict[str, str] = field(default_factory=dict)
+    assistant_source: str = ""
     assistant_text: str = ""
     assistant_emitted_text: str = ""
     assistant_priority: int = 0
@@ -128,6 +130,8 @@ class VaPipecatProtocol:
             self.user_text = ""
             self.user_emitted_text = ""
             self.assistant_segments.clear()
+            self.assistant_source_texts.clear()
+            self.assistant_source = ""
             self.assistant_text = ""
             self.assistant_emitted_text = ""
             self.assistant_priority = 0
@@ -230,6 +234,8 @@ class VaPipecatProtocol:
             self.user_text = ""
             self.user_emitted_text = ""
             self.assistant_segments.clear()
+            self.assistant_source_texts.clear()
+            self.assistant_source = ""
             self.assistant_text = ""
             self.assistant_emitted_text = ""
             self.assistant_priority = 0
@@ -296,13 +302,42 @@ class VaPipecatProtocol:
                 "bot-tts-text": 2,
                 "bot-llm-text": 1,
             }[message_type]
-            if not text or priority < self.assistant_priority:
+            if not text:
                 return None
-            if self.assistant_segments and self.assistant_segments[-1] == text:
+
+            # Pipecat can expose the same reply through several RTVI observers.
+            # Their chunk boundaries and punctuation differ, so concatenating
+            # them into one accumulator occasionally duplicated whole clauses.
+            # Accumulate each observer independently and only present the best
+            # currently available source.
+            source_text = _merge_stream_text(
+                self.assistant_source_texts.get(message_type, ""),
+                text,
+            )
+            self.assistant_source_texts[message_type] = source_text
+            if priority < self.assistant_priority:
                 return None
-            self.assistant_priority = max(self.assistant_priority, priority)
+
+            if priority > self.assistant_priority:
+                self.assistant_priority = priority
+                self.assistant_source = message_type
+                current_words = self.assistant_text.casefold().split()
+                source_words = source_text.casefold().split()
+                # Do not visibly roll a cumulative phrase back when the
+                # higher-priority observer has only emitted its first token.
+                if (
+                    source_words
+                    and len(source_words) < len(current_words)
+                    and current_words[: len(source_words)] == source_words
+                ):
+                    source_text = self.assistant_text
+            elif message_type != self.assistant_source:
+                return None
+
+            if source_text == self.assistant_text:
+                return None
             self.assistant_segments.append(text)
-            self.assistant_text = _merge_stream_text(self.assistant_text, text)
+            self.assistant_text = source_text
             if not _phrase_ready(
                 self.assistant_text,
                 self.assistant_emitted_text,
