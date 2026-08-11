@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.81
+
+- Treat punctuation-only transcript revisions as the same assistant phrase,
+  preventing duplicate first replies when overlapping RTVI observers disagree
+  only about punctuation.
+- Merge cumulative assistant phrases by normalized word prefixes while keeping
+  the newest punctuation in the final transcript.
+
 ## 0.1.80
 
 - Coalesce streaming user and assistant transcript tokens into cumulative

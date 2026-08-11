@@ -114,6 +114,37 @@ class VaPipecatProtocolTests(unittest.TestCase):
         self.assertEqual(decoded, "Dzie\u0144 dobry. W czym mog\u0119 pom\u00f3c?")
         self.assertNotIn("pom\u00f3c? Dzie\u0144", decoded)
 
+    def test_punctuation_rewrite_extends_same_assistant_phrase(self):
+        first = self.protocol.on_rtvi_message(
+            self.rtvi("bot-output", {"text": "Cze\u015b\u0107!"})
+        )
+        extended = self.protocol.on_rtvi_message(
+            self.rtvi("bot-output", {"text": "Cze\u015b\u0107, jak mog\u0119 pom\u00f3c?"})
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(extended)
+        decoded = base64.b64decode(json.loads(extended)["text_b64"]).decode("utf-8")
+        self.assertEqual(decoded, "Cze\u015b\u0107, jak mog\u0119 pom\u00f3c?")
+        self.assertNotIn("Cze\u015b\u0107! Cze\u015b\u0107", decoded)
+
+    def test_punctuation_only_final_change_is_not_emitted_twice(self):
+        self.assertIsNotNone(
+            self.protocol.on_rtvi_message(
+                self.rtvi("bot-output", {"text": "Dzi\u0119kuj\u0119."})
+            )
+        )
+        self.assertIsNone(
+            self.protocol.on_rtvi_message(
+                self.rtvi("bot-output", {"text": "Dzi\u0119kuj\u0119!"})
+            )
+        )
+        stopped = json.loads(
+            self.protocol.on_rtvi_message(self.rtvi("bot-stopped-speaking"))
+        )
+        self.assertEqual(stopped["type"], "phase")
+        self.assertEqual(stopped["phase"], "listening")
+
     def test_lower_priority_late_fragment_cannot_duplicate_selected_reply(self):
         first = self.protocol.on_rtvi_message(
             self.rtvi("bot-output", {"text": "To jest pe\u0142na odpowied\u017a."})

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,6 +27,17 @@ def _normalize_text(text: str) -> str:
     return " ".join(text.split())
 
 
+def _canonical_words(text: str) -> tuple[str, ...]:
+    """Return case-folded words without observer-specific punctuation."""
+
+    return tuple(re.findall(r"\w+", text.casefold()))
+
+
+def _same_words(left: str, right: str) -> bool:
+    left_words = _canonical_words(left)
+    return bool(left_words) and left_words == _canonical_words(right)
+
+
 def _merge_stream_text(previous: str, fragment: str) -> str:
     """Merge cumulative and tokenized transcript events without duplication."""
 
@@ -37,6 +49,18 @@ def _merge_stream_text(previous: str, fragment: str) -> str:
         return fragment
     if previous.startswith(fragment) or previous.endswith(fragment):
         return previous
+
+    # RTVI observers can revise punctuation while extending the same
+    # cumulative phrase (for example ``Cześć!`` -> ``Cześć, jak ...``).
+    # Character-prefix matching treats that as a second sentence. Compare the
+    # semantic word prefix before falling back to token concatenation.
+    previous_words = _canonical_words(previous)
+    fragment_words = _canonical_words(fragment)
+    if previous_words and fragment_words:
+        if len(previous_words) <= len(fragment_words) and fragment_words[: len(previous_words)] == previous_words:
+            return fragment
+        if len(fragment_words) <= len(previous_words) and previous_words[: len(fragment_words)] == fragment_words:
+            return previous
 
     max_overlap = min(len(previous), len(fragment))
     for overlap in range(max_overlap, 0, -1):
@@ -318,11 +342,12 @@ class VaPipecatProtocol:
             if priority < self.assistant_priority:
                 return None
 
-            if priority > self.assistant_priority:
+            priority_upgraded = priority > self.assistant_priority
+            if priority_upgraded:
                 self.assistant_priority = priority
                 self.assistant_source = message_type
-                current_words = self.assistant_text.casefold().split()
-                source_words = source_text.casefold().split()
+                current_words = _canonical_words(self.assistant_text)
+                source_words = _canonical_words(source_text)
                 # Do not visibly roll a cumulative phrase back when the
                 # higher-priority observer has only emitted its first token.
                 if (
@@ -334,7 +359,12 @@ class VaPipecatProtocol:
             elif message_type != self.assistant_source:
                 return None
 
-            if source_text == self.assistant_text:
+            if source_text == self.assistant_text or (
+                not priority_upgraded and _same_words(source_text, self.assistant_text)
+            ):
+                # Preserve the latest punctuation for the final transcript,
+                # but do not redraw a phrase that contains the same words.
+                self.assistant_text = source_text
                 return None
             self.assistant_segments.append(text)
             self.assistant_text = source_text
@@ -368,7 +398,10 @@ class VaPipecatProtocol:
             self.stop_requested = False
             next_phase = "thanks" if terminal else "listening"
             phase_extra = {"terminal": True} if terminal else {"follow_up": True}
-            if assistant_text and assistant_text != self.assistant_emitted_text:
+            if assistant_text and assistant_text != self.assistant_emitted_text and not _same_words(
+                assistant_text,
+                self.assistant_emitted_text,
+            ):
                 self.assistant_emitted_text = assistant_text
                 return self.transcript_message(
                     "assistant",
