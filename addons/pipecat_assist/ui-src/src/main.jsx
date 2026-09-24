@@ -4148,6 +4148,7 @@ function IntegrationSettings({
       <>
         <SettingsSection title="Credentials" status={secretStatus(integration, "api_key")}>
           <SecretSetting integration={integration} field="api_key" label="OpenAI API key" updateIntegration={updateIntegration} />
+          <TextSetting integration={integration} field="base_url" label="Base URL (blank for OpenAI)" updateIntegration={updateIntegration} wide />
         </SettingsSection>
         <SettingsSection title="Realtime">
           <ModelSetting
@@ -4172,6 +4173,7 @@ function IntegrationSettings({
           <SecretSetting integration={integration} field="api_key" label="OpenAI API key" updateIntegration={updateIntegration} />
           <TextSetting integration={integration} field="organization" label="Organization" updateIntegration={updateIntegration} />
           <TextSetting integration={integration} field="project" label="Project" updateIntegration={updateIntegration} />
+          <TextSetting integration={integration} field="base_url" label="Base URL (blank for OpenAI)" updateIntegration={updateIntegration} wide />
         </SettingsSection>
         <SettingsSection title="Speech to text">
           <ModelSetting

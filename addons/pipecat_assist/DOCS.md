@@ -107,6 +107,21 @@ providers such as Cartesia, ElevenLabs, Soniox, Gradium, and Google Cloud TTS
 Streaming expose a **TTS streaming** setting. `Sentence chunks` is smoother;
 `Token chunks` can reduce latency when the provider handles partial text well.
 
+### Self-hosted OpenAI-compatible servers
+
+The OpenAI (realtime) and OpenAI Cloud integrations have an optional
+**Base URL**. Leave it blank to use OpenAI. Set it, for example to
+`http://gpu-box:8000/v1`, to send the same requests to a server you run: an
+OpenAI Realtime-compatible speech-to-speech server for realtime pipelines, or
+OpenAI-compatible speech-to-text and text-to-speech servers for composed
+pipelines and the Assist bridge. The realtime WebSocket URL is derived from the
+base URL (`http` becomes `ws`, `https` becomes `wss`, and `/realtime` is
+appended). The API key is optional when a base URL is set, and the add-on's
+global OpenAI key is never sent to a custom server. Add a second OpenAI
+integration from **Integrations** to keep one for OpenAI and one for your server.
+For barge-in on a self-hosted realtime server, turn on **Interrupt response** in the
+flow; with it off, speech during a reply is queued until the reply finishes.
+
 ## Default Gemini Live setup
 
 Gemini Live is the first-run speech-to-speech pipeline. It receives audio from
