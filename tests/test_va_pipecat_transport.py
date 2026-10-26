@@ -66,6 +66,14 @@ class VaPipecatTransportTests(unittest.IsolatedAsyncioTestCase):
         frame = await self.serializer.deserialize('{"type":"interrupt"}')
         self.assertIsInstance(frame, InterruptionWorkerFrame)
 
+    async def test_browser_preserves_original_rtvi_text_and_whitespace(self):
+        serializer = VaPipecatFrameSerializer(_never_terminal, browser_rtvi=True)
+        message = {"label": "rtvi-ai", "type": "bot-output", "data": {"text": " sł", "final": False}}
+        frame = OutputTransportMessageUrgentFrame(message=message)
+        wire = json.loads(await serializer.serialize(frame))
+        self.assertEqual(wire, {"type": "rtvi", "message": message})
+        self.assertEqual(serializer.protocol.assistant_text, "")
+
     async def test_pipeline_interruption_waits_for_semantic_rtvi_event(self):
         self.assertIsNone(await self.serializer.serialize(InterruptionFrame()))
 

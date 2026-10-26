@@ -78,3 +78,4 @@ jobs:
           pnpm --dir addons/pipecat_assist/ui-src install --frozen-lockfile
           pnpm --dir addons/pipecat_assist/ui-src run build
           node --check custom_components/pipecat_assist/www/pipecat-assist-card.js
+          node --test tests/test_card_audio.cjs

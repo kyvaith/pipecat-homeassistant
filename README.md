@@ -55,7 +55,7 @@ device control through MCP.
 
 - **Pipecat Assist add-on UI**: a full-width assistant card for quick browser
   testing and pipeline development.
-- **Lovelace dashboard card**: a dedicated WebRTC card with live transcript,
+- **Lovelace dashboard card**: a dedicated realtime card with live transcript,
   smooth scrolling, and the most responsive full-duplex conversation path.
 - **Home Assistant Assist**: the custom component exposes Pipecat Assist as
   Conversation, Speech-to-text, and Text-to-speech.
@@ -147,7 +147,7 @@ responsive realtime experience.
   PCM transport.
 - `custom_components/pipecat_assist` - a Home Assistant integration that
   exposes Pipecat Assist as Conversation, STT, TTS, AI Task entities, and the
-  Lovelace WebRTC card asset.
+  realtime Lovelace card assets and authenticated audio relay.
 - `.github/workflows` - CI and GHCR publishing workflows for multi-arch Home
   Assistant images.
 
@@ -159,7 +159,8 @@ flowchart LR
     ESP32["Standalone Pipecat ESP32"] -->|"SmallWebRTC /api/offer"| Addon
     Browser["HA Ingress UI"] --> Addon
     HAConv["HA Assist bridge"] -->|"Conversation / STT / TTS HTTP bridge"| Addon
-    Lovelace["Lovelace card"] -->|"WebRTC /api/offer"| Addon
+    Lovelace["Lovelace card"] -->|"Authenticated WebSocket audio"| Component
+    Component -->|"Full-duplex PCM"| Addon
     Addon -->|"Pipecat S2S"| Realtime["Gemini Live / OpenAI Realtime / AWS Nova Sonic"]
     Addon -->|"Pipecat composed realtime"| Cascade["STT + LLM + TTS"]
     Cascade --> Flow["Pipecat Flows"]
@@ -270,9 +271,16 @@ the requested bridge operation.
 
 The Lovelace card is served by the integration at
 `/pipecat_assist/pipecat-assist-card.js`, is loaded automatically by the custom
-component, and uses the same WebRTC assistant path as the add-on demo. It calls
-the custom component proxy by default, so dashboard YAML does not need an
-Ingress token or flow ID.
+component, and uses the same active Pipecat pipeline as the add-on demo. By
+default, full-duplex audio travels through Home Assistant's authenticated
+WebSocket connection, including when the dashboard is opened outside the home
+network. Dashboard YAML does not need an add-on URL, token, or flow ID. No extra
+ports or TURN server are required. Use an HTTPS Home Assistant URL and allow
+microphone access; browser and device sound permissions still apply.
+
+Update **both the app and custom component** to use this transport, then restart
+Home Assistant and reload the dashboard. An older app/component pair keeps its
+existing direct WebRTC behavior. The add-on demo and ESP32 transports are unchanged.
 
 Useful card options:
 
@@ -285,8 +293,13 @@ accent_color: "#206cff"
 audio_buffer_ms: 120
 ```
 
-`compact_mode` hides the transcript. `audio_buffer_ms` hints the browser WebRTC
-jitter buffer; higher values can smooth playback with a small latency tradeoff.
+`compact_mode` hides the transcript. `audio_buffer_ms` sets the initial PCM
+playback buffer (capped at 500 ms for the WebSocket transport), or hints the
+browser jitter buffer in WebRTC mode. Higher values trade some responsiveness
+for smoother playback. Optional `transport: webrtc` selects direct LAN WebRTC;
+`transport: websocket` requires the HA relay. The default `auto` uses the relay
+when available. Uncompressed relay audio uses approximately 0.8 Mbit/s combined
+input/output before network overhead, so a stable mobile connection is needed.
 
 ## Audio debugging
 

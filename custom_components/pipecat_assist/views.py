@@ -32,6 +32,10 @@ def register_proxy_views(hass: HomeAssistant) -> None:
 
 def _entry_from_request(hass: HomeAssistant, request: web.Request) -> ConfigEntry:
     entry_id = request.query.get("entry_id", "")
+    return _entry_for_id(hass, entry_id)
+
+
+def _entry_for_id(hass: HomeAssistant, entry_id: str = "") -> ConfigEntry:
     entries = hass.config_entries.async_entries(DOMAIN)
     if entry_id:
         entry = next((item for item in entries if item.entry_id == entry_id), None)
@@ -87,6 +91,7 @@ class PipecatAssistConfigView(HomeAssistantView):
         entry_query = f"?entry_id={entry.entry_id}" if request.query.get("entry_id") else ""
         data["runner_offer_path"] = f"{PROXY_OFFER_PATH}{entry_query}"
         data["runner_offer_url"] = data["runner_offer_path"]
+        data["ha_audio_streaming"] = bool(data.pop("browser_ws_path", None))
         return web.json_response(data)
 
 

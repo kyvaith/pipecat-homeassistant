@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import array
+import json
 import math
 import sys
 from collections.abc import Callable
@@ -41,6 +42,7 @@ class VaPipecatFrameSerializer(FrameSerializer):
         follow_up_open_delay_ms: int = 80,
         wake_open_delay_ms: int = 0,
         playback_prebuffer_ms: int = 300,
+        browser_rtvi: bool = False,
     ):
         super().__init__(
             params=FrameSerializer.InputParams(ignore_rtvi_messages=False),
@@ -57,6 +59,7 @@ class VaPipecatFrameSerializer(FrameSerializer):
             playback_prebuffer_ms=playback_prebuffer_ms,
         )
         self._reset_audio_probe()
+        self.browser_rtvi = browser_rtvi
 
     def _reset_audio_probe(self) -> None:
         self._probe_samples = 0
@@ -115,6 +118,8 @@ class VaPipecatFrameSerializer(FrameSerializer):
             return self.protocol.phase_message("idle", terminal=True)
 
         if isinstance(frame, (OutputTransportMessageFrame, OutputTransportMessageUrgentFrame)):
+            if self.browser_rtvi:
+                return json.dumps({"type": "rtvi", "message": frame.message}, ensure_ascii=False)
             return self.protocol.on_rtvi_message(frame.message)
 
         return None
@@ -145,6 +150,7 @@ def websocket_transport_params(
     follow_up_open_delay_ms: int = 80,
     wake_open_delay_ms: int = 0,
     playback_prebuffer_ms: int = 300,
+    browser_rtvi: bool = False,
 ) -> FastAPIWebsocketParams:
     """Build the fixed PCM transport contract used by ESPHome satellites."""
 
@@ -164,6 +170,7 @@ def websocket_transport_params(
             follow_up_open_delay_ms=follow_up_open_delay_ms,
             wake_open_delay_ms=wake_open_delay_ms,
             playback_prebuffer_ms=playback_prebuffer_ms,
+            browser_rtvi=browser_rtvi,
         ),
         fixed_audio_packet_size=OUTPUT_PACKET_BYTES,
         allowed_origins=[],

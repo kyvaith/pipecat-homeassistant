@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2
+
+- Start dashboard audio playback in the original Talk button gesture. Keep the
+  audio graph alive across card updates, without a second Enable audio button.
+- Relay full-duplex dashboard PCM audio through Home Assistant's authenticated
+  WebSocket connection. Remote dashboards no longer need direct LAN WebRTC,
+  exposed add-on ports, or browser-visible add-on credentials.
+- Reuse the active Pipecat pipeline, streaming transcripts, barge-in, and
+  end-of-conversation handling. Keep direct WebRTC available as a card option.
+- Bound audio queues, clean up subscriptions and microphones on stop or
+  disconnect, and display actionable card errors instead of only Error.
+- Add relay lifecycle, microphone resampling, and playback buffer tests.
+
 ## 0.2.1
 
 - Prevent credential migration from copying an official OpenAI key into a
