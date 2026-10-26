@@ -247,7 +247,7 @@ and image-generation support. For images:
 Moondream is a Pipecat vision service for image understanding, not a
 text-to-image provider, so it is not listed as an image-generation backend.
 
-### Lovelace WebRTC card
+### Lovelace realtime card
 
 The custom component automatically registers the dashboard card module when the
 Pipecat Assist integration is installed. In the default Lovelace storage mode,
@@ -273,18 +273,28 @@ accent_color: "#206cff"
 audio_buffer_ms: 120
 ```
 
-The card talks to Home Assistant at `/api/pipecat_assist/config` and
-`/api/pipecat_assist/offer`. The custom component proxies those calls to the
-add-on and keeps the add-on Ingress token out of dashboard YAML. The card uses
-the active pipeline selected in the add-on. If you configure more than one
+The card loads `/api/pipecat_assist/config` and normally streams full-duplex
+PCM through Home Assistant's authenticated WebSocket API. It uses the active
+Pipecat pipeline, not the classic HA Assist STT/conversation/TTS bridge. This
+also works outside the home network through the normal HTTPS HA URL, without
+exposing add-on ports or configuring a TURN server. Update both the app and
+component, restart HA, reload the dashboard, and allow microphone access.
+
+Optional `transport: webrtc` uses direct LAN WebRTC and the authenticated
+`/api/pipecat_assist/offer` proxy. The default `auto` uses the HA relay when
+available; an older app/component pair retains direct WebRTC. Add-on tokens
+are not needed in dashboard YAML. If you configure more than one
 Pipecat Assist integration entry, add `entry_id` to point the card at a
 specific entry.
 
 `animation_on_idle` keeps the visualizer moving while nobody is speaking.
 Set it to `false` for a still idle card. `compact_mode` hides the transcript.
-`accent_color` accepts a HEX color. `audio_buffer_ms` is a browser WebRTC
-jitter-buffer hint; raising it can smooth choppy playback at the cost of a
-little extra delay.
+`accent_color` accepts a HEX color. `audio_buffer_ms` sets the initial PCM
+playback buffer (up to 500 ms), or hints the WebRTC jitter buffer in direct
+mode. Raising it trades a little responsiveness for smoother playback. The
+relay uses approximately 0.8 Mbit/s for simultaneous input/output before
+network overhead. A stable internet connection, HTTPS, and browser microphone
+and sound permissions are still required.
 
 ### Gemini troubleshooting
 
