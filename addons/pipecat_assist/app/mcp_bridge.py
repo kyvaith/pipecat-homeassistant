@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 import uuid
@@ -14,10 +15,11 @@ from typing import Any
 
 import httpx
 from loguru import logger
-from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.llm.schemas.function_schema import FunctionSchema
 from mcp.client.session_group import StreamableHttpParameters
+from mcp.shared.exceptions import MCPError
 
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.adapters.llm.schemas.tools_schema import ToolsSchema
 from pipecat.services.llm_service import LLMService
 from pipecat.services.mcp_service import MCPClient
 
@@ -27,7 +29,7 @@ class MCPAuthenticationError(RuntimeError):
 
 
 MCP_CALL_HISTORY: deque[dict[str, Any]] = deque(maxlen=100)
-MCP_TOOLS_SCHEMA_CACHE: dict[tuple[str, tuple[str, ...]], tuple[ToolsSchema, float]] = {}
+MCP_TOOLS_SCHEMA_CACHE: dict[tuple[str, str, tuple[str, ...]], tuple[ToolsSchema, float]] = {}
 LLM_SCHEMA_SCALAR_TYPES = {"string", "number", "integer", "boolean", "object", "array"}
 LLM_SCHEMA_STRING_FIELDS = {"description", "format", "title"}
 
@@ -225,13 +227,18 @@ def _finish_history_item(
 class RecordingMCPClient(MCPClient):
     """Pipecat MCP client that records tool calls for the Runtime UI."""
 
-    async def _call_tool(self, session, function_name, arguments, result_callback):
+    async def call_tool(self, function_name: str, arguments: dict[str, Any]) -> str:
         history_item, started = _new_history_item(function_name, dict(arguments or {}))
         logger.debug("Calling mcp tool '{}'", function_name)
         results = None
         error = ""
         try:
+            # Pipecat has no public SDK-session accessor; keep this dependency
+            # isolated and covered by the real MCP transport regression tests.
+            session = await self._open_session(as_owner=False)
             results = await session.call_tool(function_name, arguments=arguments)
+            if getattr(results, "isError", False):
+                error = "MCP server reported a tool error"
         except Exception as err:
             error = f"Error calling mcp tool {function_name}: {err}"
             logger.error(error)
@@ -246,20 +253,12 @@ class RecordingMCPClient(MCPClient):
             else:
                 logger.error("Error getting content from {} results.", function_name)
 
-        if function_name in self._tools_output_filters:
-            try:
-                response = self._tools_output_filters[function_name](response)
-                logger.debug("Final response after filter: {}", response)
-            except Exception:
-                logger.error("Error applying output filter for {}", function_name)
-                response = ""
-
-        ok = bool(response and isinstance(response, str) and not error)
+        ok = results is not None and not error
         if ok:
             logger.info("Tool '{}' completed successfully", function_name)
             logger.debug("Final response: {}", response)
         else:
-            response = "Sorry, could not call the mcp tool"
+            response = response or error or "MCP tool failed"
 
         _finish_history_item(
             history_item,
@@ -268,7 +267,30 @@ class RecordingMCPClient(MCPClient):
             result=response,
             error=error,
         )
-        await result_callback(response)
+        if not ok:
+            raise RuntimeError(response)
+        return response or "Tool completed successfully."
+
+    async def prompt_context(self) -> str:
+        """Read fresh, argument-free MCP prompts, including HA LLM API context."""
+
+        session = await self._open_session(as_owner=False)
+        try:
+            prompts = await session.list_prompts()
+        except MCPError as err:
+            if err.error.code == -32601:
+                return ""
+            raise
+        texts: list[str] = []
+        for prompt in prompts.prompts[:8]:
+            if any(argument.required for argument in prompt.arguments or []):
+                continue
+            result = await session.get_prompt(prompt.name)
+            for message in result.messages:
+                content = message.content
+                if getattr(content, "type", None) == "text" and content.text:
+                    texts.append(content.text)
+        return "\n\n".join(texts)[:24000]
 
 
 def _tool_prefix(value: str) -> str:
@@ -291,7 +313,7 @@ class HomeAssistantMCPBridge:
         self.token = token
         self.tool_allowlist = list(tool_allowlist or [])
         self.name = name
-        self.client: MCPClient | None = None
+        self.client: RecordingMCPClient | None = None
 
     async def __aenter__(self) -> "HomeAssistantMCPBridge":
         await self.start()
@@ -373,7 +395,11 @@ class HomeAssistantMCPBridge:
 
         if not self.client:
             raise RuntimeError("MCP bridge is not started")
-        cache_key = (self.url, tuple(self.tool_allowlist))
+        cache_key = (
+            self.url,
+            hashlib.sha256(self.token.encode()).hexdigest(),
+            tuple(self.tool_allowlist),
+        )
         cached = MCP_TOOLS_SCHEMA_CACHE.get(cache_key)
         now = time.time()
         if (
@@ -385,7 +411,7 @@ class HomeAssistantMCPBridge:
             logger.debug("Using cached MCP tool schema for {} at {}", self.name, self.url)
             return cached[0]
 
-        tools = _sanitize_tools_schema(await self.client.get_tools_schema())
+        tools = _sanitize_tools_schema(await self.client.tools())
         if cache_enabled:
             MCP_TOOLS_SCHEMA_CACHE[cache_key] = (tools, now)
         return tools
@@ -395,28 +421,24 @@ class HomeAssistantMCPBridge:
 
         if not self.client:
             raise RuntimeError("MCP bridge is not started")
-        await self.client.register_tools_schema(tools, llm)
+        for tool in tools.standard_tools:
+            async def handler(params, *, name=tool.name):
+                result = await self.call_tool(name, dict(params.arguments or {}))
+                await params.result_callback(result)
+
+            llm.register_function(tool.name, handler)
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """Call one MCP tool and return text content."""
 
         if not self.client:
             raise RuntimeError("MCP bridge is not started")
-        history_item, started = _new_history_item(name, arguments)
-        try:
-            session = self.client._ensure_connected()  # Pipecat exposes no public call_tool yet.
-            result = await session.call_tool(name, arguments=arguments)
-            chunks: list[str] = []
-            for content in getattr(result, "content", []) or []:
-                text = getattr(content, "text", None)
-                if text:
-                    chunks.append(text)
-            text_result = "\n".join(chunks) if chunks else "Tool returned no text content."
-            _finish_history_item(history_item, started, ok=True, result=text_result)
-            return text_result
-        except Exception as err:
-            _finish_history_item(history_item, started, ok=False, error=str(err))
-            raise
+        return await self.client.call_tool(name, arguments)
+
+    async def prompt_context(self) -> str:
+        if not self.client:
+            raise RuntimeError("MCP bridge is not started")
+        return await self.client.prompt_context()
 
 
 
@@ -433,6 +455,7 @@ class CombinedMCPBridge:
         self.bridges: list[tuple[dict[str, Any], HomeAssistantMCPBridge]] = []
         self._tool_routes: dict[str, tuple[HomeAssistantMCPBridge, str]] = {}
         self._tools_schema: ToolsSchema | None = None
+        self.prompt_context = ""
 
     async def __aenter__(self) -> "CombinedMCPBridge":
         await self.start()
@@ -479,6 +502,7 @@ class CombinedMCPBridge:
         self.bridges = []
         self._tool_routes = {}
         self._tools_schema = None
+        self.prompt_context = ""
         for _, bridge in bridges:
             with suppress(Exception):
                 await bridge.close()
@@ -496,6 +520,7 @@ class CombinedMCPBridge:
             raise RuntimeError("MCP bridge is not started")
 
         public_tools: list[FunctionSchema] = []
+        prompt_parts: list[str] = []
         routes: dict[str, tuple[HomeAssistantMCPBridge, str]] = {}
         seen: set[str] = set()
 
@@ -505,6 +530,10 @@ class CombinedMCPBridge:
                 cache_ttl_seconds=cache_ttl_seconds,
                 refresh=refresh,
             )
+            if spec.get("include_prompts", False):
+                prompt = await bridge.prompt_context()
+                if prompt:
+                    prompt_parts.append(f"Context from {bridge.name}:\n{prompt}")
             prefix = _tool_prefix(str(spec.get("id") or bridge.name))
             prefer_unprefixed = bool(spec.get("prefer_unprefixed"))
             for tool in schema.standard_tools:
@@ -531,6 +560,7 @@ class CombinedMCPBridge:
                 )
 
         self._tool_routes = routes
+        self.prompt_context = "\n\n".join(prompt_parts)[:48000]
         self._tools_schema = ToolsSchema(standard_tools=public_tools)
         return self._tools_schema
 

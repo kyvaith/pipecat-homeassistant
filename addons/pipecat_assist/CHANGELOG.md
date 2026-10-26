@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.0
+
+- Upgrade to Pipecat 1.14.0 and Python 3.12, with reproducible standard and
+  legacy amd64 dependency locks. Use bundled `pipecat.flows` instead of the
+  frozen standalone Flows package.
+- Update the MCP client lifecycle, preserve tool-error reporting, scope schema
+  caches to credentials, and close connections after failed pipeline startup.
+- Read fresh MCP context prompts, including Home Assistant LLM API extensions
+  such as Sentient, without duplicating their memory store or credentials.
+- Add optional local Smart Turn 3.2 and Deepgram Flux streaming STT, including
+  provider-managed turns and explicit language/turn-controller validation.
+- Add Speechmatics Linden Agent STT while preserving saved Enhanced, Standard,
+  and Melia Realtime configurations on their original API.
+- Support Anthropic and Azure OpenAI LLM services in composed pipelines.
+- Merge community fixes for the legacy image version and custom OpenAI base
+  URLs. Honor custom endpoints in composed and HA text paths, preserve local
+  model/voice names, and never forward the global cloud key to a local server.
+- Keep MCP and Web Search tools available inside visual Flows and preserve
+  shared instructions when a node defines its own role message.
+- Stop blocking audio queues when a provider fails, retain existing widget
+  transcript handling, and align application/component/card release versions.
+- Keep overlapping realtime transcript sources from duplicating satellite
+  captions and send Gemini credentials in headers instead of request URLs.
+- Add runtime/provider/MCP/metadata tests and synthetic audio regression tools.
+
 ## 0.1.80
 
 - Coalesce streaming user and assistant transcript tokens into cumulative

@@ -226,11 +226,37 @@ Cloud are composed/text providers. Session Memory and Web Search are separate
 pipeline steps. Web Search selects a cloud LLM provider such as OpenAI Cloud or
 Google Gemini Cloud, while Home Assistant device control remains on MCP.
 
-Official `pipecat-ai-flows` support is enabled for composed realtime pipelines.
+Official Pipecat Flows support is enabled for composed realtime pipelines.
+It uses `pipecat.flows`, now included in Pipecat itself, rather than the frozen
+standalone `pipecat-ai-flows` package.
 The flow editor stores nodes, transition functions, JSON schemas, and optional
 Home Assistant MCP tool calls. For speech-to-speech services, the UI disables
 the Pipecat Flow tile because Pipecat Flows does not currently support Gemini
 Live or OpenAI Realtime S2S APIs.
+
+### Turn detection
+
+For composed pipelines, the **Turn** step offers the existing low-latency speech
+timeout and the optional **Smart Turn (local)** analyzer bundled with Pipecat.
+Smart Turn distinguishes pauses from completed utterances; it does not replace
+the STT provider or make a cloud pipeline local.
+
+**Provider-managed** turns are available with OpenAI streaming STT, Speechmatics Linden,
+Soniox, Gradium, and Deepgram Flux. Deepgram Nova still needs a local Turn step.
+Flux has its own turn detector, and its English/multilingual models have a
+different language list from Nova. Unsupported combinations are rejected rather
+than silently substituted. Existing pipelines keep their saved turn behavior.
+
+### Household context and Sentient
+
+Pipecat Assist can consume MCP context prompts as well as tools. This allows
+Home Assistant LLM API extensions such as
+[Sentient](https://github.com/conahmorgan2304/sentient) to supply household
+memory and rules through Home Assistant's native MCP Server. Enable the desired
+LLM APIs in that server and **MCP context prompts** in the Pipecat Assist MCP
+integration. Context is refreshed for each new session or HA Assist turn,
+independently of the tool-schema cache. Sentient remains optional; Pipecat
+Assist's built-in session memory is still short-lived and in-memory.
 
 ## Home Assistant Assist and Lovelace
 
@@ -310,10 +336,14 @@ candidate for future AI Tasks that analyze image attachments.
 
 ## Development
 
-The add-on source is in `addons/pipecat_assist`.
+The add-on source is in `addons/pipecat_assist`. Version 0.2 uses Pipecat 1.14.0
+and Python 3.12 or 3.13. The container includes Python 3.12; no Home Assistant
+Core Python upgrade is needed. Cloud credentials are never part of an image.
 
 ```bash
 python -m compileall addons/pipecat_assist/app custom_components/pipecat_assist
+python -m pip install -e addons/pipecat_assist PyYAML
+python -m unittest discover -s tests -v
 ```
 
 For the React UI:
@@ -329,6 +359,13 @@ For a container build:
 ```bash
 docker build -t pipecat-assist:dev addons/pipecat_assist
 ```
+
+Container dependencies are pinned in `requirements.lock`, with a separate
+NumPy 1.x lock for the legacy amd64 image. Regeneration commands are recorded
+at the top of each lockfile. CI tests both images, the frontend build, MCP
+contracts, provider construction, and aligned release versions. Synthetic
+audio checks against a running installation are documented in
+[the validation guide](docs/runtime-validation.md).
 
 ## References
 

@@ -92,20 +92,39 @@ class VaPipecatProtocolTests(unittest.TestCase):
         self.assertEqual(self.protocol.assistant_segments, ["Dzie\u0144 dobry."])
 
     def test_assistant_word_stream_is_emitted_as_a_cumulative_phrase(self):
-        words = ["To", "jest", "odpowied\u017a", "wysy\u0142ana", "pe\u0142nymi", "frazami"]
+        words = [
+            "To",
+            "jest",
+            "odpowied\u017a",
+            "wysy\u0142ana",
+            "pe\u0142nymi",
+            "frazami",
+        ]
         for word in words[:-1]:
             self.assertIsNone(
                 self.protocol.on_rtvi_message(self.rtvi("bot-output", {"text": word}))
             )
 
         message = json.loads(
-            self.protocol.on_rtvi_message(
-                self.rtvi("bot-output", {"text": words[-1]})
-            )
+            self.protocol.on_rtvi_message(self.rtvi("bot-output", {"text": words[-1]}))
         )
         decoded = base64.b64decode(message["text_b64"]).decode("utf-8")
         self.assertEqual(decoded, " ".join(words))
         self.assertFalse(message["final"])
+
+    def test_higher_priority_output_does_not_replay_a_completed_transcription(self):
+        sentence = "Czesc, tak, slysze cie bardzo dobrze."
+        self.protocol.on_rtvi_message(
+            self.rtvi("bot-transcription", {"text": sentence})
+        )
+        for text in ("Czesc,", "tak,", "slysze", "cie bardzo", "dobrze."):
+            self.protocol.on_rtvi_message(self.rtvi("bot-output", {"text": text}))
+        self.assertEqual(self.protocol.assistant_text, sentence)
+
+    def test_word_boundaries_are_not_merged_as_character_overlap(self):
+        for text in ("W", "czym", "moge", "pomoc?"):
+            self.protocol.on_rtvi_message(self.rtvi("bot-output", {"text": text}))
+        self.assertEqual(self.protocol.assistant_text, "W czym moge pomoc?")
 
     def test_short_final_assistant_phrase_shares_message_with_follow_up(self):
         self.protocol.client_action('{"type":"wake"}')

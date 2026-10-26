@@ -89,6 +89,8 @@ COMPOSED_LLM_PROVIDER_KINDS = {
     "openai_cloud",
     "gemini_cloud",
     "aws_bedrock",
+    "anthropic",
+    "azure_openai",
     "openai_compatible",
     "ollama",
 }
@@ -185,6 +187,7 @@ class IntegrationConfig(BaseModel):
     language: str = "en"
     speed: float = Field(default=1.0, ge=0.25, le=1.5)
     tts_streaming_mode: Literal["sentence", "token"] = "sentence"
+    mcp_prompts_enabled: bool = True
     default_model: str = ""
     default_realtime_model: str = ""
     default_stt_model: str = ""
@@ -717,6 +720,7 @@ class RuntimeConfig(BaseModel):
                         "url": url,
                         "token": token,
                         "prefer_unprefixed": True,
+                        "include_prompts": integration.mcp_prompts_enabled,
                     }
                 )
                 continue
@@ -731,6 +735,7 @@ class RuntimeConfig(BaseModel):
                     "url": url,
                     "token": (integration.token or integration.api_key or "").strip(),
                     "prefer_unprefixed": False,
+                    "include_prompts": integration.mcp_prompts_enabled,
                 }
             )
         return servers
@@ -881,6 +886,8 @@ def _repair_flow_provider_model(config: RuntimeConfig, flow: FlowConfig) -> bool
     integration = config.integration(integration_id)
     if not integration or integration.kind not in {"gemini", "openai"}:
         return False
+    if integration.kind == "openai" and integration.base_url.strip():
+        return False
 
     changed = False
     default_model = (
@@ -963,7 +970,7 @@ def _repair_text_model_defaults(config: RuntimeConfig) -> bool:
         ):
             integration.default_model = gemini_default
             changed = True
-        if integration.kind == "openai_cloud" and _looks_like_provider_mismatch(
+        if integration.kind == "openai_cloud" and not integration.base_url and _looks_like_provider_mismatch(
             "openai_cloud",
             integration.default_model,
         ):
@@ -981,6 +988,8 @@ def _repair_text_model_defaults(config: RuntimeConfig) -> bool:
             if step.kind != "llm" or not step.model:
                 continue
             integration = config.integration(step.integration_id)
+            if integration and integration.kind in {"openai", "openai_cloud"} and integration.base_url:
+                continue
             provider_kind = integration.kind if integration else step.integration_id
             if _is_legacy_gemini_text_model(step.model):
                 step.model = "" if provider_kind in {"openai", "openai_cloud"} else gemini_default
@@ -1229,13 +1238,13 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
         if openai.default_model:
             openai.default_model = ""
             changed = True
-        if not _is_realtime_model_for_provider("openai", openai.default_realtime_model):
+        if not openai.base_url and not _is_realtime_model_for_provider("openai", openai.default_realtime_model):
             openai.default_realtime_model = os.getenv(
                 "REALTIME_MODEL",
                 DEFAULT_OPENAI_REALTIME_MODEL,
             )
             changed = True
-        if not _is_voice_for_provider("openai", openai.default_voice):
+        if not openai.base_url and not _is_voice_for_provider("openai", openai.default_voice):
             openai.default_voice = os.getenv("REALTIME_VOICE", DEFAULT_OPENAI_REALTIME_VOICE)
             changed = True
 
@@ -1244,14 +1253,14 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
         if openai_cloud.name != "OpenAI Cloud":
             openai_cloud.name = "OpenAI Cloud"
             changed = True
-        if openai and openai.api_key and not openai_cloud.api_key:
+        if openai and not openai.base_url and openai.api_key and not openai_cloud.api_key:
             openai_cloud.api_key = openai.api_key
             openai_cloud.enabled = openai.enabled
             changed = True
-        if not openai_cloud.default_model or _looks_like_provider_mismatch(
+        if not openai_cloud.default_model or (not openai_cloud.base_url and _looks_like_provider_mismatch(
             "openai_cloud",
             openai_cloud.default_model,
-        ):
+        )):
             openai_cloud.default_model = os.getenv(
                 "OPENAI_TEXT_MODEL",
                 os.getenv("TEXT_MODEL", DEFAULT_OPENAI_TEXT_MODEL),
@@ -1431,7 +1440,7 @@ class ConfigStore:
                 changed = True
 
         openai = config.integration("openai")
-        if config.openai_api_key and openai and not openai.api_key:
+        if config.openai_api_key and openai and not openai.base_url and not openai.api_key:
             openai.api_key = config.openai_api_key
             openai.enabled = True
             changed = True

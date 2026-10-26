@@ -93,6 +93,12 @@ const UI_TRANSLATIONS = {
     "Memory messages": "Wiadomości pamięci",
     "MCP tools cache": "Cache narzędzi MCP",
     "MCP cache TTL": "TTL cache MCP",
+    "MCP context prompts": "Kontekst i pamiec z MCP",
+    "Turn detection": "Koniec wypowiedzi",
+    "Speech timeout": "Czas ciszy",
+    "Smart Turn (local)": "Smart Turn (lokalnie)",
+    "Provider-managed": "Po stronie dostawcy",
+    "Base URL (blank for OpenAI)": "Adres API (pusty dla OpenAI)",
   },
 };
 
@@ -148,7 +154,7 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
-const ASSISTANT_CARD_VERSION = "0.1.79";
+const ASSISTANT_CARD_VERSION = "0.2.0";
 const ASSISTANT_CARD_ACCENT_HEX = "#206cff";
 const ASSISTANT_CARD_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -634,7 +640,7 @@ const addableStepTypes = stepTypes.filter(([kind]) => !["transport", "output"].i
 
 const stepProviders = {
   stt: ["soniox", "deepgram", "speechmatics", "gradium", "openai_cloud"],
-  llm: ["openai_cloud", "gemini_cloud", "aws_bedrock", "openai_compatible", "ollama"],
+  llm: ["openai_cloud", "gemini_cloud", "aws_bedrock", "anthropic", "azure_openai", "openai_compatible", "ollama"],
   tts: ["cartesia", "gradium", "google_cloud_tts", "google_streaming_tts", "elevenlabs", "openai_cloud", "soniox"],
   tools: ["home_assistant_mcp", "ha_mcp", "mcp_server"],
   web_search: ["web_search"],
@@ -1485,17 +1491,19 @@ function providerKindForIntegration(config, integrationId) {
   return integration?.kind || integrationId || "";
 }
 
-function realtimeModelMatchesProvider(provider, model) {
+function realtimeModelMatchesProvider(provider, model, integration) {
   const value = String(model || "").trim();
   if (!value) return false;
+  if (provider === "openai" && integration?.base_url?.trim()) return true;
   if (provider === "gemini") return value.includes("gemini");
   if (provider === "openai") return value.includes("realtime") && !value.startsWith("models/");
   return true;
 }
 
-function realtimeVoiceMatchesProvider(provider, voice) {
+function realtimeVoiceMatchesProvider(provider, voice, integration) {
   const value = String(voice || "").trim();
   if (!value) return false;
+  if (provider === "openai" && integration?.base_url?.trim()) return true;
   if (provider === "gemini") return !OPENAI_REALTIME_VOICES.includes(value);
   if (provider === "openai") return OPENAI_REALTIME_VOICES.includes(value);
   return true;
@@ -1551,14 +1559,15 @@ function applyTemplate(flow, templateId, config = null) {
   const output = steps.find((step) => step.kind === "output" || step.kind === "tts");
   const isRealtime = template.mode === "realtime";
   const providerKind = providerKindForIntegration(config, llm?.integration_id || template.provider);
+  const integration = config?.integrations?.find((item) => item.id === (llm?.integration_id || template.provider));
   const stepModel =
-    isRealtime && !realtimeModelMatchesProvider(providerKind, llm?.model) ? "" : llm?.model || "";
+    isRealtime && !realtimeModelMatchesProvider(providerKind, llm?.model, integration) ? "" : llm?.model || "";
   const flowModel =
-    isRealtime && !realtimeModelMatchesProvider(providerKind, flow.model) ? "" : flow.model || "";
+    isRealtime && !realtimeModelMatchesProvider(providerKind, flow.model, integration) ? "" : flow.model || "";
   const stepVoice =
-    isRealtime && !realtimeVoiceMatchesProvider(providerKind, output?.voice) ? "" : output?.voice || "";
+    isRealtime && !realtimeVoiceMatchesProvider(providerKind, output?.voice, integration) ? "" : output?.voice || "";
   const flowVoice =
-    isRealtime && !realtimeVoiceMatchesProvider(providerKind, flow.voice) ? "" : flow.voice || "";
+    isRealtime && !realtimeVoiceMatchesProvider(providerKind, flow.voice, integration) ? "" : flow.voice || "";
   return {
     ...flow,
     mode: template.mode,
@@ -1656,8 +1665,10 @@ function syncFlow(flow, config = null) {
   const defaults = providerDefaults(providerId);
   const mode = config ? deriveFlowMode(flow, config) : flow.mode;
   const isRealtime = mode === "realtime";
-  const flowModel = isRealtime && !realtimeModelMatchesProvider(providerId, flow.model) ? "" : flow.model || "";
-  const flowVoice = isRealtime && !realtimeVoiceMatchesProvider(providerId, flow.voice) ? "" : flow.voice || "";
+  const integration = config?.integrations?.find((item) => item.id === providerId);
+  const providerKind = integration?.kind || providerId;
+  const flowModel = isRealtime && !realtimeModelMatchesProvider(providerKind, flow.model, integration) ? "" : flow.model || "";
+  const flowVoice = isRealtime && !realtimeVoiceMatchesProvider(providerKind, flow.voice, integration) ? "" : flow.voice || "";
   const steps = (flow.steps || [])
     .filter((step) => !(isRealtime && step.kind === "flow"))
     .map((step) => ({
@@ -2639,10 +2650,33 @@ function validatePipeline(config, flow) {
     if (allowed && !allowed.includes(integration.kind)) {
       errors.push(`${integration.name} cannot be used as ${step.kind.toUpperCase()}.`);
     }
+    if (step.kind === "stt" && integration.kind === "deepgram") {
+      const model = integration.default_stt_model || integration.default_model || "";
+      const turn = enabledSteps.find((item) => item.kind === "vad");
+      const providerTurns = !turn || turn.settings?.mode === "provider";
+      if (model.startsWith("flux-") && !providerTurns) {
+        errors.push("Deepgram Flux requires provider-managed turns.");
+      } else if (!model.startsWith("flux-") && providerTurns) {
+        errors.push("Deepgram Nova needs a local Turn step.");
+      }
+      const language = (integration.language || flow.language || "en").replace("_", "-").split("-")[0].toLowerCase();
+      const fluxLanguages = model === "flux-general-en" ? ["en"] : ["de", "en", "es", "fr", "hi", "it", "ja", "nl", "pt", "ru"];
+      if (model.startsWith("flux-") && !fluxLanguages.includes(language)) {
+        errors.push(`Deepgram ${model} does not support language ${language}.`);
+      }
+    }
+    if (step.kind === "stt" && integration.kind === "speechmatics") {
+      const model = integration.default_stt_model || integration.default_model || SPEECHMATICS_MODEL;
+      const turn = enabledSteps.find((item) => item.kind === "vad");
+      if (model !== "linden-1" && (!turn || turn.settings?.mode === "provider")) {
+        errors.push("Speechmatics Realtime needs a local Turn step. Linden 1 supports provider-managed turns.");
+      }
+    }
     if (
       ["gemini", "gemini_cloud", "openai", "openai_cloud", "soniox", "deepgram", "cartesia", "gradium", "speechmatics", "elevenlabs"].includes(
         integration.kind,
       ) &&
+      !(["openai", "openai_cloud"].includes(integration.kind) && integration.base_url?.trim()) &&
       secretStatus(integration, "api_key") === "missing"
     ) {
       errors.push(`${integration.name} API key is missing.`);
@@ -2804,6 +2838,12 @@ function PipelineView({
   const selectedTone = selectedStep ? stepTone(selectedStep.kind) : "neutral";
   const modelIntegration = flowModelIntegration(config, flow);
   const showOpenAiBargeIn = derivedMode === "realtime" && modelIntegration?.kind === "openai";
+  const sttStep = flow.steps.find((step) => step.kind === "stt" && step.enabled);
+  const sttIntegration = config.integrations.find((item) => item.id === sttStep?.integration_id);
+  const sttModel = sttIntegration?.default_stt_model || sttIntegration?.default_model || "";
+  const isFlux = sttIntegration?.kind === "deepgram" && sttModel.startsWith("flux-");
+  const requiresLocalTurn = (sttIntegration?.kind === "deepgram" && !isFlux) ||
+    (sttIntegration?.kind === "speechmatics" && sttModel !== "linden-1");
 
   return (
     <div className="pipeline-editor-grid">
@@ -2964,6 +3004,20 @@ function PipelineView({
           <>
             <div className="divider" />
             <div className="form-grid">
+              {derivedMode === "composed" && (
+                <Field label={t("Turn detection")}>
+                  <select
+                    value={selectedStep.settings?.mode === "smart_turn" ? "smart_turn" : selectedStep.settings?.mode === "provider" ? "provider" : "speech_timeout"}
+                    onChange={(event) => updateStep(selectedStep.id, (step) => ({
+                      ...step, settings: { ...step.settings, mode: event.target.value },
+                    }))}
+                  >
+                    <option value="speech_timeout" disabled={isFlux}>{t("Speech timeout")}</option>
+                    <option value="smart_turn" disabled={isFlux}>{t("Smart Turn (local)")}</option>
+                    <option value="provider" disabled={requiresLocalTurn}>{t("Provider-managed")}</option>
+                  </select>
+                </Field>
+              )}
               {showOpenAiBargeIn && (
                 <>
                   <Field label="Noise reduction">
@@ -4217,6 +4271,9 @@ function IntegrationSettings({
     const mode = mcpMode(config);
     return (
       <SettingsSection title="Home Assistant MCP" status={mode.label}>
+        <Toggle checked={integration.mcp_prompts_enabled !== false}
+          onChange={(value) => updateIntegration(integration.id, (draft) => ({ ...draft, mcp_prompts_enabled: value }))}
+          label={t("MCP context prompts")} />
         <div className={`mcp-mode ${mode.tone} wide`}>
           <strong>{mode.label}</strong>
           <span>
@@ -4258,6 +4315,9 @@ function IntegrationSettings({
     const detected = Boolean(integration.base_url || integration.endpoint);
     return (
       <SettingsSection title="HA MCP Server Add-on" status={detected ? t("Automatic") : t("Not detected")}>
+        <Toggle checked={integration.mcp_prompts_enabled !== false}
+          onChange={(value) => updateIntegration(integration.id, (draft) => ({ ...draft, mcp_prompts_enabled: value }))}
+          label={t("MCP context prompts")} />
         <div className={detected ? "mcp-mode ok wide" : "mcp-mode error wide"}>
           <strong>{detected ? t("Automatic") : t("Not detected")}</strong>
           <span>
@@ -4304,6 +4364,9 @@ function IntegrationSettings({
       <SettingsSection title={kindLabel(integration.kind)}>
         <TextSetting integration={integration} field="base_url" label="MCP server URL" updateIntegration={updateIntegration} wide />
         <SecretSetting integration={integration} field="token" label="Bearer token" updateIntegration={updateIntegration} wide />
+        <Toggle checked={integration.mcp_prompts_enabled !== false}
+          onChange={(value) => updateIntegration(integration.id, (draft) => ({ ...draft, mcp_prompts_enabled: value }))}
+          label={t("MCP context prompts")} />
         <div className="empty-state wide">
           Enable multiple MCP integrations to expose all of their tools to Pipecat Assist. Home Assistant MCP keeps original tool names; additional servers are prefixed automatically.
         </div>
@@ -4342,7 +4405,13 @@ function IntegrationSettings({
     return (
       <SettingsSection title={kindLabel(integration.kind)} status={secretStatus(integration, "api_key")}>
         <SecretSetting integration={integration} field="api_key" label="API key" updateIntegration={updateIntegration} />
-        <TextSetting integration={integration} field="default_model" label="STT model" updateIntegration={updateIntegration} />
+        {["deepgram", "speechmatics"].includes(integration.kind) ? (
+          <ModelSetting integration={integration} field="default_model" label="STT model"
+            updateIntegration={updateIntegration} modelOptions={modelOptions}
+            loadModelOptions={loadModelOptions} capability="stt" />
+        ) : (
+          <TextSetting integration={integration} field="default_model" label="STT model" updateIntegration={updateIntegration} />
+        )}
         {["soniox", "gradium"].includes(integration.kind) && (
           <TextSetting integration={integration} field="default_voice" label="TTS voice" updateIntegration={updateIntegration} />
         )}

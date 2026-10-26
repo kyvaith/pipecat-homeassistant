@@ -70,6 +70,31 @@ and return to the Supervisor-backed defaults. The manual access-token field is
 only for custom deployments where the Supervisor token is not available or a
 custom MCP URL is used.
 
+### MCP context prompts and Sentient
+
+The **MCP context prompts** switch is available for every MCP integration.
+When enabled, Pipecat Assist reads argument-free prompts exposed by that
+server, alongside its tools. Context is refreshed at the start of a WebRTC or
+satellite session and on each HA Assist turn; cached tool schemas do not cache
+the prompt content. Servers without prompt support continue to work.
+
+For optional persistent household memory and rules:
+
+1. Install and configure [Sentient](https://github.com/conahmorgan2304/sentient)
+   in Home Assistant.
+2. In Home Assistant's **Model Context Protocol Server** integration, select
+   **Assist** and the desired **Sentient** LLM API in its exposed APIs.
+3. Enable **Home Assistant MCP** and **MCP context prompts** in Pipecat Assist.
+   Keep the pipeline's **Tools** step enabled and use **Test MCP**.
+4. Start a new conversation. The native MCP server supplies Sentient's tools
+   and context; there is no separate Sentient token or duplicated memory store
+   in Pipecat Assist.
+
+Only enable prompts from servers you trust. MCP prompts become part of the
+assistant's instructions. Prompts requiring arguments are not automatically
+invoked. The built-in Session Memory step remains transient and independent
+of Sentient's persistent memory.
+
 ### Audio debug captures
 
 Open **Runtime**, enable **Record audio in/out**, save, and run a
@@ -106,6 +131,28 @@ providers can synthesize streamed LLM output in chunks. In **Integrations**,
 providers such as Cartesia, ElevenLabs, Soniox, Gradium, and Google Cloud TTS
 Streaming expose a **TTS streaming** setting. `Sentence chunks` is smoother;
 `Token chunks` can reduce latency when the provider handles partial text well.
+
+The **Turn** step controls when STT output is submitted to the LLM:
+
+- **Speech timeout** preserves the existing local VAD/timeout behavior.
+- **Smart Turn (local)** adds Pipecat's bundled Smart Turn 3.2 ONNX analyzer
+  to distinguish a pause from the end of a question. It needs no extra service
+  or API key and is opt-in for existing pipelines.
+- **Provider-managed** uses the STT service's turn boundaries. Supported by
+  OpenAI streaming STT, Speechmatics Linden, Soniox, Gradium, and Deepgram Flux.
+
+Removing the Turn step removes local VAD/Smart Turn, so a provider-managed
+service is then required. Deepgram Nova needs a local Turn step; Flux requires
+provider-managed turns. Flux English supports English; Flux multilingual
+supports German, English, Spanish, French, Hindi, Italian, Japanese, Dutch,
+Portuguese, and Russian. It does not support Polish. No fallback to Nova or
+another provider is performed.
+
+Speechmatics exposes its existing Realtime models (`enhanced`, `standard`,
+`melia-1`) and the newer Agent STT model (`linden-1`) separately. Existing
+Realtime settings are preserved; select Linden explicitly to use Agent STT.
+The older models need a local Turn step. Both API families stream transcripts
+and use the same saved Speechmatics key; there is no model fallback.
 
 ### Self-hosted OpenAI-compatible servers
 
@@ -213,7 +260,7 @@ resource and then add a manual card:
 ```yaml
 lovelace:
   resources:
-    - url: /pipecat_assist/pipecat-assist-card.js?v=0.1.79
+    - url: /pipecat_assist/pipecat-assist-card.js?v=0.2.0
       type: module
 ```
 

@@ -19,6 +19,7 @@ from app.config import (
     RuntimeConfig,
 )
 from app.mcp_bridge import CombinedMCPBridge
+from app.openai_endpoint import openai_api_key
 from app.web_search_tool import WEB_SEARCH_TOOL_NAME, run_gemini_web_search, run_openai_web_search
 
 CONVERSATION_END_SYSTEM_HINT = (
@@ -255,6 +256,8 @@ async def run_text_conversation(
         api_key = (integration.api_key if integration else "") or os.getenv("GOOGLE_API_KEY", "")
     elif provider_kind == "aws_bedrock":
         api_key = "bedrock"
+    elif integration and integration.base_url and provider_kind in {"openai", "openai_cloud"}:
+        api_key = openai_api_key(integration, "LLM", config.openai_api_key)
     else:
         api_key = (integration.api_key if integration else "") or config.openai_api_key
     if provider_kind == "ollama" and not api_key:
@@ -297,6 +300,9 @@ async def run_text_conversation(
                 cache_ttl_seconds=config.mcp_tools_cache_ttl_seconds,
             )
             tools.extend(_format_openai_tools(tools_schema))
+            if bridge.prompt_context:
+                messages[0]["content"] += f"\n\n{bridge.prompt_context}"
+                system += f"\n\n{bridge.prompt_context}"
         except asyncio.CancelledError as err:
             with suppress(Exception):
                 await bridge.close()
@@ -477,7 +483,7 @@ async def run_text_conversation(
             )
         else:
             client_kwargs: dict[str, Any] = {"api_key": api_key}
-            if integration and integration.base_url and provider_kind in {"openai_compatible", "ollama"}:
+            if integration and integration.base_url and provider_kind in {"openai", "openai_cloud", "openai_compatible", "ollama"}:
                 client_kwargs["base_url"] = integration.base_url
             if provider_kind in {"gemini", "gemini_cloud"}:
                 client_kwargs["base_url"] = (

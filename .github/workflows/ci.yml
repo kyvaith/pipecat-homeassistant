@@ -24,17 +24,22 @@ jobs:
           python -m compileall addons/pipecat_assist/app custom_components/pipecat_assist
       - name: Install lightweight test dependencies
         run: |
-          python -m pip install "httpx>=0.28,<1" "loguru>=0.7,<1"
+          python -m pip install "httpx>=0.28,<1" "loguru>=0.7,<1" "pyyaml>=6,<7"
       - name: Test ESPHome integration
         run: |
           python -m unittest \
             tests.test_va_pipecat_protocol \
             tests.test_esphome_provisioner \
+            tests.test_release_metadata \
             -v
 
   docker:
-    name: Docker build
+    name: Docker build (legacy=${{ matrix.legacy }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        legacy: ["false", "true"]
     steps:
       - uses: actions/checkout@v6
       - name: Build add-on image
@@ -43,11 +48,33 @@ jobs:
             --tag pipecat-assist-ci \
             --build-arg BUILD_VERSION=dev \
             --build-arg BUILD_ARCH=amd64 \
+            --build-arg LEGACY_AMD64_NUMPY=${{ matrix.legacy }} \
             addons/pipecat_assist
-      - name: Test ESPHome satellite transport in the add-on image
+      - name: Test runtime, MCP, providers, and satellite contracts
         run: |
           docker run --rm \
             --entrypoint python3 \
-            --volume "${{ github.workspace }}/tests:/tests:ro" \
+            --volume "${{ github.workspace }}:/workspace:ro" \
+            --workdir /workspace \
             pipecat-assist-ci \
-            -m unittest discover -s /tests -v
+            -m unittest discover -s tests -v
+      - name: Verify resolved dependencies
+        run: |
+          docker run --rm --entrypoint python3 pipecat-assist-ci -m pip check
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "11.25.0"
+      - name: Build configuration UI and check the Lovelace card
+        run: |
+          pnpm --dir addons/pipecat_assist/ui-src install --frozen-lockfile
+          pnpm --dir addons/pipecat_assist/ui-src run build
+          node --check custom_components/pipecat_assist/www/pipecat-assist-card.js

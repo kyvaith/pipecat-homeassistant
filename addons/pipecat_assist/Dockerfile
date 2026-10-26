@@ -1,4 +1,5 @@
 ARG BUILD_FROM=ghcr.io/home-assistant/amd64-base-debian:bookworm
+FROM python:3.12-slim-bookworm AS python-runtime
 FROM ${BUILD_FROM}
 
 ARG BUILD_VERSION=0.1.0
@@ -9,6 +10,8 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
 
+COPY --from=python-runtime /usr/local/ /usr/local/
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
@@ -16,24 +19,30 @@ RUN apt-get update \
         ca-certificates \
         ffmpeg \
         libffi-dev \
+        libbz2-1.0 \
+        libexpat1 \
+        libgdbm6 \
+        liblzma5 \
+        libncursesw6 \
         libopus0 \
+        libreadline8 \
         libsndfile1 \
+        libsqlite3-0 \
         libssl-dev \
         libvpx7 \
-        python3 \
-        python3-dev \
-        python3-pip \
+        uuid-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml /tmp/pipecat_assist/pyproject.toml
 COPY constraints-legacy-amd64.txt /tmp/pipecat_assist/constraints-legacy-amd64.txt
-COPY app/ /tmp/pipecat_assist/app/
+COPY requirements*.lock /tmp/pipecat_assist/
 RUN if [ "${LEGACY_AMD64_NUMPY}" = "true" ]; then \
-        pip3 install --constraint /tmp/pipecat_assist/constraints-legacy-amd64.txt /tmp/pipecat_assist; \
+        pip3 install --requirement /tmp/pipecat_assist/requirements-legacy-amd64.lock; \
     else \
-        pip3 install /tmp/pipecat_assist; \
-    fi \
-    && rm -rf /tmp/pipecat_assist
+        pip3 install --requirement /tmp/pipecat_assist/requirements.lock; \
+    fi
+COPY app/ /tmp/pipecat_assist/app/
+RUN pip3 install --no-deps /tmp/pipecat_assist && rm -rf /tmp/pipecat_assist
 
 COPY app/ /app/
 COPY root/ /

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import httpx
 from loguru import logger
 from openai import AsyncOpenAI
-from pipecat.adapters.schemas.function_schema import FunctionSchema
+from pipecat.adapters.llm.schemas.function_schema import FunctionSchema
 
 from app.config import DEFAULT_GEMINI_TEXT_MODEL
 
