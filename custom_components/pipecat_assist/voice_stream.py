@@ -9,6 +9,7 @@ from contextlib import suppress
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import aiohttp
+from aiohttp import web
 
 from .const import DOMAIN
 
@@ -259,7 +260,14 @@ def register_voice_stream(hass):
             relay.entry_id = entry.entry_id
             relay.task = task
             await relay.run()
-        except Exception:
+        except (
+            aiohttp.ClientError,
+            TimeoutError,
+            OSError,
+            ValueError,
+            RuntimeError,
+            web.HTTPException,
+        ):
             if relay is None or relay.unregister is None:
                 connection.send_error(
                     message["id"],
