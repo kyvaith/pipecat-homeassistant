@@ -161,6 +161,8 @@ HA_TTS_BRIDGE_KINDS = {
     "soniox",
 }
 IMAGE_GENERATION_KINDS = {"google_imagen", "fal_image"}
+OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
+LOCAL_API_KEY_PLACEHOLDER = "not-needed"
 PROVIDER_RETRY_STATUSES = {429, 500, 502, 503, 504}
 TTS_PREFETCH_TTL_SECONDS = 90
 TTS_PREFETCH: dict[tuple[str, str, str], tuple[float, Any]] = {}
@@ -988,15 +990,23 @@ async def api_integration_models(integration_id: str, capability: str = "llm"):
 
     fallback = _static_models_for(integration, capability)
     try:
-        if integration.kind in {"openai", "openai_cloud"} and (integration.api_key or config.openai_api_key):
-            headers = {"Authorization": f"Bearer {integration.api_key or config.openai_api_key}"}
+        base_url = _openai_base_url(integration)
+        if integration.kind in {"openai", "openai_cloud"} and (
+            integration.api_key or config.openai_api_key or base_url
+        ):
+            if base_url:
+                api_key = integration.api_key or LOCAL_API_KEY_PLACEHOLDER
+            else:
+                api_key = integration.api_key or config.openai_api_key
+            headers = {"Authorization": f"Bearer {api_key}"}
             async with httpx.AsyncClient(timeout=8.0) as client:
-                response = await client.get("https://api.openai.com/v1/models", headers=headers)
+                response = await client.get(f"{base_url or 'https://api.openai.com/v1'}/models", headers=headers)
                 response.raise_for_status()
+            # Custom servers name their models freely, so only filter OpenAI's own list.
             models = sorted(
                 item["id"]
                 for item in response.json().get("data", [])
-                if _filter_openai_model(str(item.get("id", "")), capability)
+                if base_url or _filter_openai_model(str(item.get("id", "")), capability)
             )
             if models:
                 return {"ok": True, "models": [{"id": item, "label": item} for item in models]}
@@ -1514,7 +1524,10 @@ async def _transcribe_audio_bytes(
     if integration.kind in {"openai", "openai_cloud"}:
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=_integration_api_key_or_400(integration, "STT", config.openai_api_key))
+        client = AsyncOpenAI(
+            api_key=_openai_api_key_or_400(integration, "STT", config.openai_api_key),
+            base_url=_openai_base_url(integration) or None,
+        )
         openai_stt_model = model or DEFAULT_OPENAI_STT_MODEL
         if "realtime" in openai_stt_model:
             openai_stt_model = DEFAULT_OPENAI_STT_MODEL
@@ -2268,7 +2281,10 @@ async def _synthesize_tts_audio(
     if integration.kind in {"openai", "openai_cloud"}:
         from openai import AsyncOpenAI
 
-        client = AsyncOpenAI(api_key=_integration_api_key_or_400(integration, "TTS", config.openai_api_key))
+        client = AsyncOpenAI(
+            api_key=_openai_api_key_or_400(integration, "TTS", config.openai_api_key),
+            base_url=_openai_base_url(integration) or None,
+        )
         async def request_openai_tts():
             return await client.audio.speech.create(
                 model=model or DEFAULT_OPENAI_TTS_MODEL,
@@ -3531,11 +3547,11 @@ async def _openai_realtime_transcribe_stream(
     model: str,
     metadata: dict[str, Any],
 ) -> str:
-    api_key = _integration_api_key(integration, "STT", config.openai_api_key)
+    api_key = _openai_api_key(integration, "STT", config.openai_api_key)
     sample_rate = int(_ws_metadata_value(metadata, "sample_rate", 24000) or 24000)
     language = _normalize_language_hint(str(_ws_metadata_value(metadata, "language", "")))
     transcription_model = _openai_realtime_transcription_model(flow, model)
-    url = f"wss://api.openai.com/v1/realtime?model={quote(transcription_model, safe='')}"
+    url = f"{_openai_realtime_url(integration)}?model={quote(transcription_model, safe='')}"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "OpenAI-Beta": "realtime=v1",
@@ -4184,6 +4200,44 @@ def _integration_api_key(
     return api_key
 
 
+def _openai_base_url(integration: IntegrationConfig | None) -> str:
+    """Return the custom OpenAI API base URL, or "" to use api.openai.com."""
+    if not integration or integration.kind not in {"openai", "openai_cloud"}:
+        return ""
+    return (integration.base_url or "").strip().rstrip("/")
+
+
+def _openai_realtime_url(integration: IntegrationConfig | None) -> str:
+    """Map an http(s) base URL such as http://host:8000/v1 to its realtime WebSocket URL."""
+    base_url = _openai_base_url(integration)
+    if not base_url:
+        return OPENAI_REALTIME_URL
+    if base_url.startswith("https://"):
+        base_url = "wss://" + base_url[len("https://") :]
+    elif base_url.startswith("http://"):
+        base_url = "ws://" + base_url[len("http://") :]
+    if not base_url.endswith("/realtime"):
+        base_url += "/realtime"
+    return base_url
+
+
+def _openai_api_key(integration: IntegrationConfig, role: str, fallback: str = "") -> str:
+    """Like _integration_api_key, but a custom base URL may run without a key.
+
+    The global OpenAI key is never sent to a custom base URL.
+    """
+    if _openai_base_url(integration):
+        return (integration.api_key or "").strip() or LOCAL_API_KEY_PLACEHOLDER
+    return _integration_api_key(integration, role, fallback)
+
+
+def _openai_api_key_or_400(integration: IntegrationConfig, role: str, fallback: str = "") -> str:
+    try:
+        return _openai_api_key(integration, role, fallback)
+    except RuntimeError as err:
+        raise HTTPException(status_code=400, detail=str(err)) from err
+
+
 def _integration_api_key_or_400(
     integration: IntegrationConfig,
     role: str,
@@ -4524,6 +4578,7 @@ def _openai_realtime_service(
 ):
     return OpenAIRealtimeLLMService(
         api_key=api_key,
+        base_url=_openai_realtime_url(integration),
         settings=OpenAIRealtimeLLMService.Settings(
             model=model,
             system_instruction=_effective_instructions(flow),
@@ -4613,7 +4668,8 @@ def _build_stt_service(
         from pipecat.services.openai.stt import OpenAIRealtimeSTTService
 
         return OpenAIRealtimeSTTService(
-            api_key=_integration_api_key(integration, "STT", config.openai_api_key),
+            api_key=_openai_api_key(integration, "STT", config.openai_api_key),
+            base_url=_openai_realtime_url(integration),
             model=model or DEFAULT_OPENAI_STT_MODEL,
             language=language,
         )
@@ -4777,7 +4833,8 @@ def _build_tts_service(config: RuntimeConfig, flow: FlowConfig):
         from pipecat.services.openai.tts import OpenAITTSService
 
         return OpenAITTSService(
-            api_key=_integration_api_key(integration, "TTS", config.openai_api_key),
+            api_key=_openai_api_key(integration, "TTS", config.openai_api_key),
+            base_url=_openai_base_url(integration) or None,
             settings=OpenAITTSService.Settings(
                 model=model or DEFAULT_OPENAI_TTS_MODEL,
                 voice=voice or DEFAULT_OPENAI_TTS_VOICE,
@@ -4955,7 +5012,10 @@ async def run_bot(
         if provider_kind == "gemini":
             api_key = (integration.api_key if integration else "") or os.getenv("GOOGLE_API_KEY", "")
         elif provider_kind == "openai":
-            api_key = (integration.api_key if integration else "") or config.openai_api_key
+            if integration and _openai_base_url(integration):
+                api_key = _openai_api_key(integration, "realtime")
+            else:
+                api_key = (integration.api_key if integration else "") or config.openai_api_key
         else:
             api_key = ""
 
