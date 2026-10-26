@@ -2797,15 +2797,18 @@ def _transport_params(config: RuntimeConfig, flow: FlowConfig) -> dict[str, Any]
     }
 
 
-def _rtvi_observer_params() -> RTVIObserverParams:
+def _rtvi_observer_params(*, speech_to_speech: bool = False) -> RTVIObserverParams:
     """Expose live transcript and assistant text events to the WebRTC clients."""
 
     return RTVIObserverParams(
-        bot_output_enabled=True,
+        bot_output_enabled=not speech_to_speech,
         bot_llm_enabled=True,
-        bot_tts_enabled=True,
+        bot_tts_enabled=not speech_to_speech,
         bot_speaking_enabled=True,
-        user_llm_enabled=True,
+        # Existing cards speak RTVI 1.4. Do not also replay the new user-input
+        # stream or late context snapshots as a second user utterance.
+        user_llm_enabled=False,
+        user_input_enabled=False,
         user_speaking_enabled=True,
         user_transcription_enabled=True,
         metrics_enabled=True,
@@ -5346,7 +5349,7 @@ async def _run_bot_session(
         worker = PipelineWorker(
             pipeline,
             params=PipelineParams(enable_metrics=True, enable_usage_metrics=True),
-            rtvi_observer_params=_rtvi_observer_params(),
+            rtvi_observer_params=_rtvi_observer_params(speech_to_speech=True),
             idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
         )
 

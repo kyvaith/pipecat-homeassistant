@@ -36,6 +36,7 @@ from app.main import (
     _gemini_live_service,
     _openai_realtime_service,
     _queue_stream_audio,
+    _rtvi_observer_params,
     _runtime_flow_errors,
     _static_models_for,
     _step_model_for,
@@ -254,6 +255,16 @@ class ServiceConstructionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TurnAndFlowTests(unittest.TestCase):
+    def test_rtvi_upgrade_keeps_one_caption_source_for_legacy_cards(self):
+        params = _rtvi_observer_params(speech_to_speech=True)
+        self.assertFalse(params.user_input_enabled)
+        self.assertFalse(params.user_llm_enabled)
+        self.assertTrue(params.user_transcription_enabled)
+        self.assertFalse(params.bot_output_enabled)
+        self.assertFalse(params.bot_tts_enabled)
+        self.assertTrue(params.bot_llm_enabled)
+        self.assertTrue(_rtvi_observer_params().bot_output_enabled)
+
     def test_custom_openai_model_survives_saved_config_migration(self):
         integration = IntegrationConfig(
             id="openai",
