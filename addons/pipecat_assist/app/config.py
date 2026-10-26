@@ -1253,7 +1253,7 @@ def _repair_provider_defaults(config: RuntimeConfig) -> bool:
         if openai_cloud.name != "OpenAI Cloud":
             openai_cloud.name = "OpenAI Cloud"
             changed = True
-        if openai and not openai.base_url and openai.api_key and not openai_cloud.api_key:
+        if openai and not openai.base_url and not openai_cloud.base_url and openai.api_key and not openai_cloud.api_key:
             openai_cloud.api_key = openai.api_key
             openai_cloud.enabled = openai.enabled
             changed = True

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1
+
+- Prevent credential migration from copying an official OpenAI key into a
+  keyless custom OpenAI Cloud endpoint. Preserve explicitly configured keys.
+- Reapply the saved log level after runner initialization so INFO mode does
+  not emit DEBUG tool schemas and household context.
+- Add a canonical-integration credential-isolation regression test.
+
 ## 0.2.0
 
 - Upgrade to Pipecat 1.14.0 and Python 3.12, with reproducible standard and

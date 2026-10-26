@@ -255,6 +255,30 @@ class ServiceConstructionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TurnAndFlowTests(unittest.TestCase):
+    def test_canonical_custom_openai_cloud_never_inherits_the_official_key(self):
+        official = IntegrationConfig(
+            id="openai",
+            name="Official",
+            kind="openai",
+            api_key="official-key-must-stay-private",
+        )
+        local = IntegrationConfig(
+            id="openai-cloud",
+            name="Local",
+            kind="openai_cloud",
+            base_url="http://local-ai:8000/v1",
+            default_model="gemini-local-model",
+        )
+        config = RuntimeConfig(integrations=[official, local], flows=[FlowConfig()])
+        with tempfile.TemporaryDirectory() as directory:
+            store = ConfigStore(Path(directory) / "test.json")
+            store.save(config)
+            loaded = store.load()
+        self.assertEqual(loaded.integration("openai-cloud").api_key, "")
+        self.assertEqual(
+            loaded.integration("openai-cloud").default_model, "gemini-local-model"
+        )
+
     def test_rtvi_upgrade_keeps_one_caption_source_for_legacy_cards(self):
         params = _rtvi_observer_params(speech_to_speech=True)
         self.assertFalse(params.user_input_enabled)

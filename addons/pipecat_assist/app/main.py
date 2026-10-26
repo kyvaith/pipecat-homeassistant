@@ -3213,6 +3213,8 @@ def _schedule_ha_assist_warmup(
 
 @app.on_event("startup")
 async def _startup_warm_ha_assist() -> None:
+    # The runner installs its own DEBUG sink after main() configures logging.
+    _configure_logging()
     _schedule_ha_assist_warmup(reason="startup")
     if os.getenv("ESPHOME_PROVISIONING_ENABLED", "true").lower() not in {"0", "false", "no"}:
         ESPHOME_PROVISIONER.start()
