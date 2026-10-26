@@ -1,4 +1,4 @@
-const PIPECAT_ASSIST_CARD_VERSION = "0.2.1";
+const PIPECAT_ASSIST_CARD_VERSION = "0.2.2";
 const DEFAULT_ACCENT_HEX = "#206cff";
 const DEFAULT_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -34,8 +34,10 @@ const CARD_TRANSLATIONS = {
     greeting: "What would you like to do today?",
     talk: "Talk",
     stop: "Stop",
-    enableAudio: "Enable audio",
-    audioBlocked: "Audio is connected, but the browser blocked playback.",
+    audioUnavailable: "Audio could not start. Check the browser's sound permissions and try again.",
+    streamUnavailable: "Update the Pipecat Assist app and integration to use remote voice streaming.",
+    streamClosed: "The voice connection was interrupted. Please reconnect.",
+    streamSlow: "The connection is too slow for live audio. Please reconnect.",
     waitingForMicrophone: "Waiting for microphone permission",
     microphoneUnavailable: "Microphone access is not available from this browser context.",
     microphoneBlocked: "Microphone access is blocked. Allow microphone access and retry.",
@@ -50,8 +52,10 @@ const CARD_TRANSLATIONS = {
     greeting: "Co chciałbyś dzisiaj zrobić?",
     talk: "Mów",
     stop: "Zatrzymaj",
-    enableAudio: "Włącz dźwięk",
-    audioBlocked: "Dźwięk jest połączony, ale przeglądarka zablokowała odtwarzanie.",
+    audioUnavailable: "Nie udało się uruchomić dźwięku. Sprawdź uprawnienia dźwięku w przeglądarce i spróbuj ponownie.",
+    streamUnavailable: "Zaktualizuj aplikację i integrację Pipecat Assist, aby używać rozmów spoza domu.",
+    streamClosed: "Połączenie głosowe zostało przerwane. Połącz się ponownie.",
+    streamSlow: "Połączenie jest zbyt wolne dla rozmowy na żywo. Połącz się ponownie.",
     waitingForMicrophone: "Oczekiwanie na zgodę użycia mikrofonu",
     microphoneUnavailable: "Dostęp do mikrofonu nie jest dostępny w tej przeglądarce.",
     microphoneBlocked: "Dostęp do mikrofonu jest zablokowany. Zezwól na mikrofon i spróbuj ponownie.",
@@ -1025,7 +1029,7 @@ class PipecatAssistCard extends HTMLElement {
       this.disconnectVisualizerInput(name);
     }
     this.visualizerInputs = {};
-    if (this.visualizerContext && this.visualizerContext.state !== "closed") {
+    if (this.visualizerContext && this.visualizerContext !== this.playbackContext && this.visualizerContext.state !== "closed") {
       this.visualizerContext.close().catch(() => {});
     }
     this.visualizerContext = undefined;
@@ -1250,7 +1254,9 @@ class PipecatAssistCard extends HTMLElement {
     if (this.endConversationStopping) return;
     this.endConversationStopping = true;
     this.clearEndConversationRequest();
-    window.setTimeout(() => {
+    const epoch = this.sessionEpoch;
+    this.endConversationStopTimer = window.setTimeout(() => {
+      if (epoch !== this.sessionEpoch) return;
       this.stop();
       this.endConversationStopping = false;
     }, delayMs);
@@ -1265,6 +1271,10 @@ class PipecatAssistCard extends HTMLElement {
   }
 
   stop() {
+    this.sessionEpoch = (this.sessionEpoch || 0) + 1;
+    clearTimeout(this.connectionTimer);
+    clearTimeout(this.endConversationStopTimer);
+    this.stopRelay();
     this.endConversationStopping = true;
     this.clearEndConversationRequest();
     if (this.pingTimer) {
@@ -1299,6 +1309,12 @@ class PipecatAssistCard extends HTMLElement {
     this.remoteStream?.getTracks().forEach((track) => track.stop());
     this.resetAudioElement();
     this.remoteStream = undefined;
+    this.clearPlayback();
+    this.remoteAudioSource?.disconnect();
+    this.remoteAudioSource = undefined;
+    this.remoteAudioStream = undefined;
+    if (this.playbackContext && this.playbackContext.state !== "closed") this.playbackContext.close().catch(() => {});
+    this.playbackContext = undefined;
     this.audioBlocked = false;
     this.lastStoppedAt = Date.now();
     this.clearTranscriptData();
@@ -1321,20 +1337,40 @@ class PipecatAssistCard extends HTMLElement {
       return;
     }
 
+    const epoch = this.sessionEpoch = (this.sessionEpoch || 0) + 1;
     try {
+      // Resume inside the original click, before permission/network awaits.
+      const playbackReady = this.primePlayback();
       this.state = "requesting";
       this.detail = this.t("waitingForMicrophone");
       this.clearTranscriptData();
       this.cancelLocalSpeechResume();
       this.render();
       this.resetAudioElement();
+      await playbackReady;
       await this.waitForAudioSessionRelease();
       const addonConfig = await this.loadAddonConfig();
-      this.stream = await navigator.mediaDevices.getUserMedia({
+      if (epoch !== this.sessionEpoch) return;
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true },
         video: false,
       });
+      if (epoch !== this.sessionEpoch) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      this.stream = stream;
       this.ensureVisualizer();
+      const transport = this.config.transport || "auto";
+      if (!["auto", "websocket", "webrtc"].includes(transport)) throw new Error("Invalid voice transport.");
+      if (this.proxyMode() && transport !== "webrtc" && addonConfig.ha_audio_streaming) {
+        await this.startRelay(epoch);
+        return;
+      }
+      if (transport === "websocket") throw new Error(this.t("streamUnavailable"));
+      this.connectionTimer = setTimeout(() => {
+        if (epoch === this.sessionEpoch && this.state !== "connected") this.fail(this.t("streamClosed"));
+      }, 20000);
       this.startLocalSpeechRecognition();
 
       const peer = new RTCPeerConnection();
@@ -1345,7 +1381,7 @@ class PipecatAssistCard extends HTMLElement {
       else peer.addTransceiver("audio", { direction: "sendrecv" });
 
       this.channel = peer.createDataChannel("signalling");
-      this.channel.onmessage = (event) => this.handleRealtimeMessage(event.data);
+      this.channel.onmessage = (event) => { if (epoch === this.sessionEpoch) this.handleRealtimeMessage(event.data); };
       this.channel.onopen = () => {
         this.channel.send(JSON.stringify({
           label: "rtvi-ai",
@@ -1366,6 +1402,7 @@ class PipecatAssistCard extends HTMLElement {
       };
 
       peer.ontrack = (event) => {
+        if (epoch !== this.sessionEpoch || this.peer !== peer) return;
         if (event.track.kind !== "audio") return;
         this.applyRemoteAudioBuffer(event.receiver);
         this.remoteStream = event.streams[0] || new MediaStream([event.track]);
@@ -1373,7 +1410,9 @@ class PipecatAssistCard extends HTMLElement {
         this.attachAudio();
       };
       peer.onconnectionstatechange = () => {
+          if (this.peer !== peer || epoch !== this.sessionEpoch) return;
           if (peer.connectionState === "connected") {
+            clearTimeout(this.connectionTimer);
             this.state = "connected";
             this.detail = this.t("connectedDetail");
             this.render();
@@ -1410,12 +1449,14 @@ class PipecatAssistCard extends HTMLElement {
       });
       if (!response.ok) throw new Error(await this.offerErrorMessage(response));
       const answer = await response.json();
+      if (epoch !== this.sessionEpoch) return;
       await peer.setRemoteDescription({ sdp: answer.sdp, type: answer.type });
       this.applyRemoteAudioBuffers(peer);
       this.detail = this.t("connectingAudio");
       this.render();
       this.attachAudio();
     } catch (err) {
+      if (epoch !== this.sessionEpoch) return;
       const name = err?.name || "";
       const message = name === "NotAllowedError"
         ? this.t("microphoneBlocked")
@@ -1652,27 +1693,154 @@ class PipecatAssistCard extends HTMLElement {
   }
 
   attachAudio() {
-    if (!this.audio || !this.remoteStream) return;
-    if (this.audio.srcObject !== this.remoteStream) this.audio.srcObject = this.remoteStream;
-    this.audio.autoplay = true;
-    this.audio.playsInline = true;
-    this.audio.muted = false;
-    this.audio.volume = 1;
-    const playPromise = this.audio.play();
-    if (playPromise?.catch) {
-      playPromise.catch((err) => {
-        if (err?.name !== "NotAllowedError" || this.audioBlocked) return;
-        this.audioBlocked = true;
-        this.detail = this.t("audioBlocked");
-        this.render();
-      });
+    if (!this.remoteStream || !this.playbackContext || this.remoteAudioStream === this.remoteStream) return;
+    this.remoteAudioSource?.disconnect();
+    this.remoteAudioSource = this.playbackContext.createMediaStreamSource(this.remoteStream);
+    this.remoteAudioSource.connect(this.playbackContext.destination);
+    this.remoteAudioStream = this.remoteStream;
+  }
+
+  primePlayback() {
+    const Constructor = window.AudioContext || window.webkitAudioContext;
+    if (!Constructor) throw new Error(this.t("audioUnavailable"));
+    this.playbackContext = new Constructor({ latencyHint: "interactive" });
+    this.visualizerContext = this.playbackContext;
+    this.playbackNodes = new Set();
+    this.nextPlaybackAt = 0;
+    this.playbackAnalyser = this.playbackContext.createAnalyser();
+    this.playbackAnalyser.fftSize = 1024;
+    this.playbackAnalyser.connect(this.playbackContext.destination);
+    return this.playbackContext.resume().then(() => {
+      if (this.playbackContext?.state !== "running") throw new Error(this.t("audioUnavailable"));
+    });
+  }
+
+  clearPlayback() {
+    for (const node of this.playbackNodes || []) {
+      try { node.stop(); } catch { /* Already finished. */ }
     }
+    this.playbackNodes?.clear();
+    this.nextPlaybackAt = 0;
+  }
+
+  playPcm(encoded) {
+    const context = this.playbackContext;
+    if (!context || context.state !== "running") throw new Error(this.t("audioUnavailable"));
+    const bytes = Uint8Array.from(atob(encoded), (value) => value.charCodeAt(0));
+    if (!bytes.length || bytes.length % 2) throw new Error("Invalid voice audio packet.");
+    if (this.nextPlaybackAt - context.currentTime > 4) throw new Error(this.t("streamSlow"));
+    const view = new DataView(bytes.buffer);
+    const buffer = context.createBuffer(1, bytes.length / 2, 24000);
+    const samples = buffer.getChannelData(0);
+    for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 32768;
+    const node = context.createBufferSource();
+    node.buffer = buffer;
+    node.connect(this.playbackAnalyser);
+    const start = this.nextPlaybackAt > context.currentTime ? this.nextPlaybackAt : context.currentTime + Math.min(this.audioBufferMs(), 500) / 1000;
+    node.start(start);
+    this.nextPlaybackAt = start + buffer.duration;
+    this.playbackNodes.add(node);
+    node.onended = () => { this.playbackNodes?.delete(node); node.disconnect(); };
+    this.visualizerInputs ||= {};
+    this.visualizerInputs.remote = { analyser: this.playbackAnalyser, data: new Uint8Array(512), source: { disconnect() {} }, trackIds: "pcm" };
+  }
+
+  async startRelay(epoch) {
+    const connection = this._hass?.connection;
+    if (!connection?.subscribeMessage) throw new Error(this.t("streamUnavailable"));
+    this.state = "connecting";
+    this.render();
+    this.relayConnection = connection;
+    this.connectionTimer = setTimeout(() => {
+      if (epoch === this.sessionEpoch && this.state !== "connected") this.fail(this.t("streamClosed"));
+    }, 25000);
+    this.relayDisconnect = () => { if (epoch === this.sessionEpoch) this.fail(this.t("streamClosed")); };
+    connection.addEventListener("disconnected", this.relayDisconnect);
+    const message = { type: "pipecat_assist/stream", client_id: this.clientId(), language: this.sessionLanguage() };
+    if (this.config.entry_id) message.entry_id = this.config.entry_id;
+    if (this.config.flow_id) message.flow_id = this.config.flow_id;
+    const unsubscribe = await connection.subscribeMessage((event) => {
+      if (epoch !== this.sessionEpoch) return;
+      try { this.handleRelayEvent(event, epoch); } catch (error) { this.fail(error.message); }
+    }, message);
+    if (epoch !== this.sessionEpoch) {
+      await unsubscribe().catch(() => {});
+      return;
+    }
+    this.relayUnsubscribe = unsubscribe;
+  }
+
+  async startPcmCapture(epoch) {
+    const context = this.playbackContext;
+    await context.audioWorklet.addModule(`/pipecat_assist/pipecat-assist-audio-worklet.js?v=${PIPECAT_ASSIST_CARD_VERSION}`);
+    if (epoch !== this.sessionEpoch) return;
+    this.captureSource = context.createMediaStreamSource(this.stream);
+    this.captureNode = new AudioWorkletNode(context, "pipecat-microphone");
+    this.captureNode.port.onmessage = ({ data }) => {
+      if (epoch !== this.sessionEpoch || !this.relayHandlerId) return;
+      const socket = this.relayConnection?.socket;
+      if (!socket || socket.readyState !== WebSocket.OPEN || socket.bufferedAmount > 262144) {
+        this.fail(this.t("streamSlow"));
+        return;
+      }
+      const packet = new Uint8Array(data.byteLength + 1);
+      packet[0] = this.relayHandlerId;
+      packet.set(new Uint8Array(data), 1);
+      socket.send(packet);
+    };
+    this.captureSilence = context.createGain();
+    this.captureSilence.gain.value = 0;
+    this.captureSource.connect(this.captureNode);
+    this.captureNode.connect(this.captureSilence);
+    this.captureSilence.connect(context.destination);
+  }
+
+  handleRelayEvent(event, epoch) {
+    if (event.type === "ready") {
+      if (event.input_sample_rate !== 16000 || event.output_sample_rate !== 24000 || event.channels !== 1) throw new Error("Unsupported voice audio format.");
+      clearTimeout(this.connectionTimer);
+      this.relayHandlerId = event.input_handler_id;
+      this.state = "connected";
+      this.detail = this.t("connectedDetail");
+      this.render();
+      this.startPcmCapture(epoch).catch((error) => { if (epoch === this.sessionEpoch) this.fail(error.message); });
+    } else if (event.type === "audio") {
+      this.playPcm(event.audio);
+    } else if (event.type === "transcript") {
+      const text = new TextDecoder().decode(Uint8Array.from(atob(event.text_b64), (value) => value.charCodeAt(0)));
+      if (event.role === "user") this.applyUserText(text, event.final);
+      else this.applyAssistantText(text, 4);
+    } else if (event.type === "interrupt") {
+      this.clearPlayback();
+      this.finishAssistantTurn(false);
+    } else if (event.type === "error") {
+      throw new Error(event.message || (event.message_b64 && new TextDecoder().decode(Uint8Array.from(atob(event.message_b64), (value) => value.charCodeAt(0)))) || this.t("streamClosed"));
+    } else if (event.type === "closed") {
+      if (!this.endConversationPending && !this.endConversationStopping) throw new Error(this.t("streamClosed"));
+    }
+    if (event.phase === "speaking") this.beginAssistantTurn();
+    if (event.phase === "listening") this.scheduleAssistantTurnFinish(Math.max(100, ((this.nextPlaybackAt || 0) - this.playbackContext.currentTime) * 1000));
+    if (event.terminal) {
+      this.endConversationPending = true;
+      this.finishConversationAfterAssistant(Math.max(150, ((this.nextPlaybackAt || 0) - this.playbackContext.currentTime) * 1000 + 100));
+    }
+  }
+
+  stopRelay() {
+    this.relayHandlerId = undefined;
+    this.captureNode?.port.close();
+    this.captureNode?.disconnect();
+    this.captureSource?.disconnect();
+    this.captureSilence?.disconnect();
+    this.captureNode = this.captureSource = this.captureSilence = undefined;
+    if (this.relayDisconnect) this.relayConnection?.removeEventListener("disconnected", this.relayDisconnect);
+    this.relayUnsubscribe?.().catch(() => {});
+    this.relayUnsubscribe = this.relayConnection = this.relayDisconnect = undefined;
   }
 
   render() {
     if (!this.shadowRoot) return;
     const running = ["requesting", "connecting", "connected"].includes(this.state);
-    const needsAudioTap = running && this.audioBlocked;
     const compact = this.compactMode();
     const accentHex = this.accentHex();
     const accent = this.accentRgb();
@@ -1951,20 +2119,18 @@ class PipecatAssistCard extends HTMLElement {
               <span class="status-pill ${statusClass}">${escapeHtml(statusLabel)}</span>
             </div>
             <div class="actions">
-              ${needsAudioTap ? `<button class="secondary audio-button">${escapeHtml(this.t("enableAudio"))}</button>` : ""}
               <button class="main-button">${escapeHtml(running ? this.t("stop") : this.t("talk"))}</button>
             </div>
           </div>
+          ${this.state === "error" ? `<div role="alert" style="position:relative;z-index:3;color:#ffb4ad;padding:0 20px;overflow-wrap:anywhere">${escapeHtml(this.detail)}</div>` : ""}
           ${transcriptHtml}
           <div class="visualizer-shell" aria-hidden="true">
             <canvas class="visualizer"></canvas>
           </div>
           <span class="version">v${PIPECAT_ASSIST_CARD_VERSION}</span>
-          <audio autoplay playsinline></audio>
         </div>
       </ha-card>
     `;
-    this.audio = this.shadowRoot.querySelector("audio");
     this.streamEl = this.streamAssistantMessageId ? this.transcriptTextElement(this.streamAssistantMessageId) : null;
     this.streamFadeSpans = null;
     this.streamSolidNode = null;
@@ -1972,15 +2138,6 @@ class PipecatAssistCard extends HTMLElement {
     this.syncTranscriptDom();
     this.ensureVisualizer();
     this.attachAudio();
-    const audioButton = this.shadowRoot.querySelector(".audio-button");
-    if (audioButton) {
-      audioButton.onclick = () => {
-        this.audioBlocked = false;
-        this.detail = this.t("connectedDetail");
-        this.render();
-        this.attachAudio();
-      };
-    }
     this.shadowRoot.querySelector(".main-button").onclick = () => running ? this.stop() : this.start();
   }
 }

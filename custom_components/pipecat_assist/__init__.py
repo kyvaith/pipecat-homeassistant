@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import VERSION
 from .views import register_proxy_views
+from .voice_stream import register_voice_stream
 
 PLATFORMS = [Platform.CONVERSATION, Platform.STT, Platform.TTS]
 if hasattr(Platform, "AI_TASK"):
@@ -32,6 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await _async_register_static_path(hass)
     register_proxy_views(hass)
+    register_voice_stream(hass)
     _async_register_frontend_module(hass)
     await _async_register_lovelace_resource(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -43,6 +45,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
+        for relay in list(hass.data.get("pipecat_assist", {}).get("voice_streams", {}).values()):
+            if relay and relay.entry_id == entry.entry_id:
+                relay.stop()
         _async_unregister_frontend_module(hass)
     return unloaded
 

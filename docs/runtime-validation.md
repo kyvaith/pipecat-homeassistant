@@ -8,6 +8,7 @@ the following checks before deploying a runtime upgrade to a household.
 ```bash
 python -m pip install -e addons/pipecat_assist PyYAML
 python -m unittest discover -s tests -v
+node --test tests/test_card_audio.cjs
 docker build -t pipecat-assist:qa addons/pipecat_assist
 docker run --rm --entrypoint python3 pipecat-assist:qa -m pip check
 docker build --build-arg LEGACY_AMD64_NUMPY=true \
@@ -57,3 +58,22 @@ Also test the light/dark UI, opening and saving an existing pipeline, starting
 and stopping a conversation, tool errors, an invalid provider key, and MCP
 disconnection. Report untested providers or hardware explicitly. Never treat
 a fallback to a different model or provider as a passing test.
+
+## Dashboard audio relay
+
+Use an isolated HA Core with the candidate custom component and app. Open the
+real HA dashboard in a browser with microphone permission and normal autoplay
+restrictions. Do not pass a browser flag that disables autoplay protection.
+Verify that one Talk click starts audible output, without an Enable audio
+button. Repeat start/stop, check microphone release and transcript cleanup,
+and test both speech-to-speech and composed pipelines, including no greeting.
+
+Block direct WebRTC or LAN media connectivity and confirm the default card still
+receives audio through HA's WebSocket API. Test an actual remote HTTPS dashboard
+and mobile device separately. Simulating blocked WebRTC does not prove cellular
+coverage, Android sound routing, or subjective speaker quality.
+
+Check that another authenticated connection cannot control a stream it did not
+create, invalid audio packets terminate only their own stream, and disconnects
+or provider failures release the binary handler and subscription. Add-on bearer
+credentials must stay on the HA server, not in dashboard configuration or URLs.
