@@ -50,6 +50,21 @@ test('PCM playback keeps the configured prebuffer without adding it to every pac
   assert.equal(starts[1], 0.16);
 });
 
+test('relay interim STT corrections are replaced, not appended to final words', () => {
+  const { Card } = cardClass();
+  const card = new Card();
+  Object.assign(card, { currentUserText: '', userTranscript: '', partialTranscript: '', currentUserUpdatedAt: 0, lastAssistantTextAt: 0 });
+  card.assistantEchoReferences = () => [];
+  card.setCurrentUserCaption = text => { card.caption = text; };
+  const event = (text, final) => card.applyRelayUserText({ type: 'user-transcription', data: { text, final } });
+  event('Odpowiedz.', true);
+  event('Tylko jednym krótkim zdaniu', false);
+  event('Tylko jednym krótkim zdaniem.', true);
+  event('Czy dobrze mnie widz', false);
+  event('Czy dobrze mnie słyszysz?', true);
+  assert.equal(card.caption, 'Odpowiedz. Tylko jednym krótkim zdaniem. Czy dobrze mnie słyszysz?');
+});
+
 for (const sampleRate of [48000, 44100]) {
   test(`worklet produces PCM16 at 16 kHz from ${sampleRate} Hz with anti-alias filtering`, () => {
     let Processor;

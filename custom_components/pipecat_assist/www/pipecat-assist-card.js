@@ -586,6 +586,7 @@ class PipecatAssistCard extends HTMLElement {
     this.assistantTranscript = "";
     this.partialTranscript = "";
     this.currentUserText = "";
+    this.relayUserFinalText = "";
     this.currentUserUpdatedAt = 0;
     this.assistantTurnBase = "";
     this.assistantTurnText = "";
@@ -1569,7 +1570,7 @@ class PipecatAssistCard extends HTMLElement {
       && isLikelyTranscriptEcho(text, assistantReference);
   }
 
-  applyUserText(text, finalEvent) {
+  applyUserText(text, finalEvent, replaceCurrent = false) {
     const cleanedText = this.cleanUserSpeechText(text);
     if (!cleanedText) return;
     if (this.assistantEchoReferences().some((reference) => isLikelyTranscriptEcho(cleanedText, reference))) return;
@@ -1578,7 +1579,7 @@ class PipecatAssistCard extends HTMLElement {
     const startsNewUserTurn = this.lastAssistantTextAt > this.currentUserUpdatedAt
       || (!this.partialTranscript && this.currentUserUpdatedAt && now - this.currentUserUpdatedAt > 8000);
     if (finalEvent) {
-      this.currentUserText = startsNewUserTurn
+      this.currentUserText = startsNewUserTurn || replaceCurrent
         ? cleanedText
         : mergeDisplayTurnText(this.currentUserText, cleanedText);
       this.currentUserUpdatedAt = now;
@@ -1586,7 +1587,7 @@ class PipecatAssistCard extends HTMLElement {
       this.partialTranscript = "";
     } else {
       this.partialTranscript = cleanedText;
-      this.currentUserText = startsNewUserTurn
+      this.currentUserText = startsNewUserTurn || replaceCurrent
         ? cleanedText
         : mergeDisplayTurnText(this.currentUserText, cleanedText);
       this.currentUserUpdatedAt = now;
@@ -1795,6 +1796,17 @@ class PipecatAssistCard extends HTMLElement {
     this.captureSilence.connect(context.destination);
   }
 
+  applyRelayUserText(message) {
+    const text = this.textFromEvent(message);
+    if (!text) return;
+    if (this.lastAssistantTextAt > this.currentUserUpdatedAt) this.relayUserFinalText = "";
+    const final = Boolean(message.data?.final || message.is_final || message.final);
+    if (final) this.relayUserFinalText = mergeDisplayTurnText(this.relayUserFinalText || "", text);
+    const display = final ? this.relayUserFinalText : mergeDisplayTurnText(this.relayUserFinalText || "", text);
+    // Interim STT hypotheses can revise earlier words; never commit them to history.
+    this.applyUserText(display, final, true);
+  }
+
   handleRelayEvent(event, epoch) {
     if (event.type === "ready") {
       if (event.input_sample_rate !== 16000 || event.output_sample_rate !== 24000 || event.channels !== 1) throw new Error("Unsupported voice audio format.");
@@ -1812,7 +1824,8 @@ class PipecatAssistCard extends HTMLElement {
         this.clearPlayback();
         this.finishAssistantTurn(false);
       }
-      this.handleRealtimeMessage(JSON.stringify(message));
+      if (message.type === "user-transcription") this.applyRelayUserText(message);
+      else this.handleRealtimeMessage(JSON.stringify(message));
       if (message.type === "bot-stopped-speaking") {
         this.scheduleAssistantTurnFinish(Math.max(100, ((this.nextPlaybackAt || 0) - this.playbackContext.currentTime) * 1000 + 100));
       }
