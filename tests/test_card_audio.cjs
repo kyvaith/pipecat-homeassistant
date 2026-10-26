@@ -50,6 +50,24 @@ test('PCM playback keeps the configured prebuffer without adding it to every pac
   assert.equal(starts[1], 0.16);
 });
 
+test('WebRTC keeps a muted decoder driver while Web Audio owns audible output', async () => {
+  const { Card, context } = cardClass();
+  const card = new Card();
+  let plays = 0;
+  const driver = { play: async () => { plays++; } };
+  context.document.createElement = () => driver;
+  card.remoteStream = {};
+  let connected = false;
+  card.playbackContext = { createMediaStreamSource: () => ({ connect() { connected = true; } }) };
+  card.attachAudio();
+  card.attachAudio();
+  await Promise.resolve();
+  assert.equal(plays, 1);
+  assert.equal(driver.muted, true);
+  assert.equal(driver.srcObject, card.remoteStream);
+  assert.ok(connected);
+});
+
 test('relay interim STT corrections are replaced, not appended to final words', () => {
   const { Card } = cardClass();
   const card = new Card();

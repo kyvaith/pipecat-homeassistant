@@ -1695,10 +1695,20 @@ class PipecatAssistCard extends HTMLElement {
 
   attachAudio() {
     if (!this.remoteStream || !this.playbackContext || this.remoteAudioStream === this.remoteStream) return;
+    // Chromium needs a playing media element to pull decoded WebRTC audio.
+    // It stays muted: the gesture-unlocked AudioContext is the only output.
+    this.audio ||= document.createElement("audio");
+    this.audio.muted = true;
+    this.audio.playsInline = true;
+    this.audio.srcObject = this.remoteStream;
     this.remoteAudioSource?.disconnect();
     this.remoteAudioSource = this.playbackContext.createMediaStreamSource(this.remoteStream);
     this.remoteAudioSource.connect(this.playbackContext.destination);
     this.remoteAudioStream = this.remoteStream;
+    const stream = this.remoteStream;
+    this.audio.play().catch(() => {
+      if (this.remoteAudioStream === stream) this.fail(this.t("audioUnavailable"));
+    });
   }
 
   primePlayback() {
