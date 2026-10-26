@@ -160,7 +160,13 @@ class VoiceRelay:
                         }
                     )
                     self.enqueue({"type": "wake"})
-                elif event.get("type") in {"phase", "transcript", "interrupt", "error"}:
+                elif event.get("type") in {
+                    "phase",
+                    "transcript",
+                    "interrupt",
+                    "error",
+                    "rtvi",
+                }:
                     self.event(event)
             elif message.type == aiohttp.WSMsgType.ERROR:
                 raise ValueError("The Pipecat voice connection was interrupted.")

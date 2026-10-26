@@ -1681,7 +1681,7 @@ class PipecatAssistCard extends HTMLElement {
       || Boolean(message.data?.final || message.is_final || message.final);
 
     if (isRtviUserTextType(type)) {
-      if (type === "user-transcription" && this.shouldIgnoreServerUserTranscription(finalEvent)) return;
+      if (type === "user-transcription" && !this.relayHandlerId && this.shouldIgnoreServerUserTranscription(finalEvent)) return;
       this.applyUserText(text, finalEvent);
       return;
     }
@@ -1806,6 +1806,16 @@ class PipecatAssistCard extends HTMLElement {
       this.startPcmCapture(epoch).catch((error) => { if (epoch === this.sessionEpoch) this.fail(error.message); });
     } else if (event.type === "audio") {
       this.playPcm(event.audio);
+    } else if (event.type === "rtvi") {
+      const message = event.message || {};
+      if (message.type === "bot-interrupted") {
+        this.clearPlayback();
+        this.finishAssistantTurn(false);
+      }
+      this.handleRealtimeMessage(JSON.stringify(message));
+      if (message.type === "bot-stopped-speaking") {
+        this.scheduleAssistantTurnFinish(Math.max(100, ((this.nextPlaybackAt || 0) - this.playbackContext.currentTime) * 1000 + 100));
+      }
     } else if (event.type === "transcript") {
       const text = new TextDecoder().decode(Uint8Array.from(atob(event.text_b64), (value) => value.charCodeAt(0)));
       if (event.role === "user") this.applyUserText(text, event.final);

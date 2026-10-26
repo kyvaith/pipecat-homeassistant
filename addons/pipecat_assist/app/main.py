@@ -2787,7 +2787,7 @@ def _session_properties(
     )
 
 
-def _transport_params(config: RuntimeConfig, flow: FlowConfig) -> dict[str, Any]:
+def _transport_params(config: RuntimeConfig, flow: FlowConfig, *, browser_pcm: bool = False) -> dict[str, Any]:
     return {
         "webrtc": lambda: TransportParams(
             audio_in_enabled=True,
@@ -2796,6 +2796,7 @@ def _transport_params(config: RuntimeConfig, flow: FlowConfig) -> dict[str, Any]
         ),
         "websocket": lambda: websocket_transport_params(
             _should_end_conversation,
+            browser_rtvi=browser_pcm,
             follow_up_ms=config.esphome_follow_up_ms,
             follow_up_open_delay_ms=config.esphome_follow_up_open_delay_ms,
             wake_open_delay_ms=config.esphome_wake_open_delay_ms,
@@ -5511,7 +5512,10 @@ async def bot(runner_args: RunnerArguments):
     flow_errors = _runtime_flow_errors(config, flow)
     if flow_errors:
         raise RuntimeError(flow_errors[0])
-    transport = await create_transport(runner_args, _transport_params(config, flow))
+    transport = await create_transport(
+        runner_args,
+        _transport_params(config, flow, browser_pcm=_runner_body(runner_args).get("transport") == "browser-pcm"),
+    )
     await run_bot(transport, runner_args, config, flow, mcp_token=config.effective_mcp_token)
 
 
