@@ -27,8 +27,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from loguru import logger
 from starlette.staticfiles import StaticFiles
 
-from pipecat.adapters.schemas.function_schema import FunctionSchema
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
+from pipecat.adapters.llm.schemas.function_schema import FunctionSchema
+from pipecat.adapters.llm.schemas.tools_schema import ToolsSchema
 from pipecat.frames.frames import ErrorFrame, LLMRunFrame, URLImageRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -104,6 +104,13 @@ from app.mcp_bridge import (
     list_mcp_call_history,
 )
 from app.session_memory import SESSION_MEMORY
+from app.openai_endpoint import (
+    LOCAL_API_KEY_PLACEHOLDER,
+    OPENAI_REALTIME_URL,
+    openai_api_key as _openai_api_key,
+    openai_base_url as _openai_base_url,
+    openai_realtime_url as _openai_realtime_url,
+)
 from app.text_agent import run_text_conversation
 from app.va_pipecat import websocket_transport_params
 from app.va_pipecat_protocol import VaPipecatProtocol
@@ -161,8 +168,6 @@ HA_TTS_BRIDGE_KINDS = {
     "soniox",
 }
 IMAGE_GENERATION_KINDS = {"google_imagen", "fal_image"}
-OPENAI_REALTIME_URL = "wss://api.openai.com/v1/realtime"
-LOCAL_API_KEY_PLACEHOLDER = "not-needed"
 PROVIDER_RETRY_STATUSES = {429, 500, 502, 503, 504}
 TTS_PREFETCH_TTL_SECONDS = 90
 TTS_PREFETCH: dict[tuple[str, str, str], tuple[float, Any]] = {}
@@ -360,7 +365,7 @@ async def _gemini_generate_content(
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{quote(_gemini_model_path(model), safe='')}:generateContent"
     async def request() -> httpx.Response:
         async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post(url, params={"key": api_key}, json=payload)
+            response = await client.post(url, headers={"x-goog-api-key": api_key}, json=payload)
             response.raise_for_status()
             return response
 
@@ -945,8 +950,13 @@ def _static_models_for(integration: IntegrationConfig, capability: str) -> list[
             values = []
     elif integration.kind == "cartesia":
         values = [integration.default_model or DEFAULT_CARTESIA_MODEL]
+    elif integration.kind == "deepgram":
+        values = [integration.default_stt_model or integration.default_model or DEFAULT_DEEPGRAM_MODEL,
+                  DEFAULT_DEEPGRAM_MODEL, "flux-general-en", "flux-general-multi"]
     elif integration.kind == "elevenlabs":
         values = [integration.default_model or DEFAULT_ELEVENLABS_MODEL]
+    elif integration.kind == "speechmatics":
+        values = [integration.default_model or DEFAULT_SPEECHMATICS_MODEL, "enhanced", "standard", "melia-1", "linden-1"]
     elif integration.kind == "google_cloud_tts":
         values = [integration.default_voice or DEFAULT_GOOGLE_TTS_VOICE]
     elif integration.kind == "google_streaming_tts":
@@ -1017,7 +1027,7 @@ async def api_integration_models(integration_id: str, capability: str = "llm"):
             async with httpx.AsyncClient(timeout=8.0) as client:
                 response = await client.get(
                     "https://generativelanguage.googleapis.com/v1beta/models",
-                    params={"key": integration.api_key},
+                    headers={"x-goog-api-key": integration.api_key},
                 )
                 response.raise_for_status()
             models = []
@@ -1689,7 +1699,6 @@ async def _handle_ha_live_stt_stream(
             or DEFAULT_HA_STT_SAMPLE_RATE
         ),
     )
-    chunks: list[bytes] = []
     await websocket.send_json({"type": "ready", "mode": "live", "provider": "gemini"})
     try:
         while True:
@@ -1698,8 +1707,9 @@ async def _handle_ha_live_stt_stream(
             if message_type == "websocket.disconnect":
                 raise WebSocketDisconnect()
             if data := message.get("bytes"):
-                chunks.append(data)
-                await live_queue.put(data)
+                await _queue_stream_audio(live_queue, turn.task, data)
+                if turn.error:
+                    raise HTTPException(status_code=502, detail=f"Pipecat Live Bridge failed: {turn.error}")
                 continue
             raw_text = message.get("text")
             if not raw_text:
@@ -1711,8 +1721,9 @@ async def _handle_ha_live_stt_stream(
             if event.get("type") == "end":
                 break
     finally:
-        with suppress(Exception):
-            await live_queue.put(None)
+        if turn.task and not turn.task.done():
+            with suppress(Exception):
+                await _queue_stream_audio(live_queue, turn.task, None)
 
     transcript = await _wait_for_ha_live_transcript(turn)
     if turn.error:
@@ -1725,6 +1736,20 @@ async def _handle_ha_live_stt_stream(
 
     await websocket.send_json({"type": "final", "text": transcript.strip()})
     await websocket.close()
+
+
+async def _queue_stream_audio(queue, provider_task, chunk) -> None:
+    """Bound backpressure when a provider exits while its audio queue is full."""
+
+    while not provider_task.done():
+        try:
+            async with asyncio.timeout(0.25):
+                await queue.put(chunk)
+                return
+        except TimeoutError:
+            continue
+    if not provider_task.cancelled():
+        provider_task.result()
 
 
 @app.websocket("/api/assist/stt/stream")
@@ -1810,7 +1835,7 @@ async def api_stt_stream(websocket: WebSocket):
             if data := message.get("bytes"):
                 chunks.append(data)
                 if provider_queue and provider_task and not provider_task.done():
-                    await provider_queue.put(data)
+                    await _queue_stream_audio(provider_queue, provider_task, data)
                 continue
             raw_text = message.get("text")
             if not raw_text:
@@ -1831,7 +1856,7 @@ async def api_stt_stream(websocket: WebSocket):
         )
 
         if provider_queue and provider_task and not provider_task.done():
-            await provider_queue.put(None)
+            await _queue_stream_audio(provider_queue, provider_task, None)
 
         transcript = ""
         if provider_task:
@@ -1869,11 +1894,6 @@ async def api_stt_stream(websocket: WebSocket):
         await websocket.close()
     except WebSocketDisconnect:
         logger.info("HA Assist STT stream disconnected flow={}", flow.id)
-        if provider_queue:
-            with suppress(Exception):
-                await provider_queue.put(None)
-        if provider_task:
-            provider_task.cancel()
     except HTTPException as err:
         await _send_ws_json(websocket, {"type": "error", "detail": err.detail})
         with suppress(Exception):
@@ -1883,6 +1903,12 @@ async def api_stt_stream(websocket: WebSocket):
         await _send_ws_json(websocket, {"type": "error", "detail": str(err)})
         with suppress(Exception):
             await websocket.close(code=1011)
+    finally:
+        if provider_task:
+            if not provider_task.done():
+                provider_task.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await provider_task
 
 
 def _tts_prefetch_key(flow_id: str, text: str, response_format: str) -> tuple[str, str, str]:
@@ -2797,6 +2823,16 @@ def _enabled_step(flow: FlowConfig, kind: str):
     return next((step for step in flow.steps if step.kind == kind and step.enabled), None)
 
 
+def _flow_with_mcp_context(flow: FlowConfig, bridge: CombinedMCPBridge | None) -> FlowConfig:
+    """Attach fresh household context without changing saved pipeline settings."""
+
+    if not bridge or not bridge.prompt_context:
+        return flow
+    return flow.model_copy(
+        update={"instructions": f"{flow.instructions}\n\n{bridge.prompt_context}"}
+    )
+
+
 def _step_integration(
     config: RuntimeConfig,
     flow: FlowConfig,
@@ -3091,10 +3127,9 @@ async def _warm_gemini_live_ha_setup(
     url = (
         "wss://generativelanguage.googleapis.com/ws/"
         "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-        f"?key={quote(api_key, safe='')}"
     )
     started_at = time.perf_counter()
-    async with _websocket_connect(url, {}) as provider_ws:
+    async with _websocket_connect(url, {"x-goog-api-key": api_key}) as provider_ws:
         await provider_ws.send(
             json.dumps({"setup": _gemini_live_ha_setup(config, flow, integration, tools_schema)})
         )
@@ -3176,7 +3211,8 @@ def _schedule_ha_assist_warmup(
 @app.on_event("startup")
 async def _startup_warm_ha_assist() -> None:
     _schedule_ha_assist_warmup(reason="startup")
-    ESPHOME_PROVISIONER.start()
+    if os.getenv("ESPHOME_PROVISIONING_ENABLED", "true").lower() not in {"0", "false", "no"}:
+        ESPHOME_PROVISIONER.start()
 
 
 @app.on_event("shutdown")
@@ -3398,6 +3434,7 @@ async def _run_gemini_live_ha_turn(
         mcp_tool_names = {
             tool.name for tool in (mcp_tools_schema.standard_tools if mcp_tools_schema else [])
         }
+        flow = _flow_with_mcp_context(flow, bridge)
         api_key = _integration_api_key(
             integration,
             "Pipecat Live Bridge",
@@ -3406,9 +3443,8 @@ async def _run_gemini_live_ha_turn(
         url = (
             "wss://generativelanguage.googleapis.com/ws/"
             "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-            f"?key={quote(api_key, safe='')}"
         )
-        async with _websocket_connect(url, {}) as provider_ws:
+        async with _websocket_connect(url, {"x-goog-api-key": api_key}) as provider_ws:
             await provider_ws.send(
                 json.dumps({"setup": _gemini_live_ha_setup(config, flow, integration, tools_schema)})
             )
@@ -3442,7 +3478,7 @@ async def _run_gemini_live_ha_turn(
                             break
             finally:
                 sender_task.cancel()
-                with suppress(Exception):
+                with suppress(asyncio.CancelledError):
                     await sender_task
         _remember_ha_live_transcript(turn)
         _remember_ha_live_speech(turn)
@@ -3612,7 +3648,7 @@ async def _openai_realtime_transcribe_stream(
                         raise RuntimeError(error.get("message") or "OpenAI realtime transcription failed")
         finally:
             sender_task.cancel()
-            with suppress(Exception):
+            with suppress(asyncio.CancelledError):
                 await sender_task
         return transcript
 
@@ -3625,6 +3661,12 @@ async def _deepgram_transcribe_stream(
     model: str,
     metadata: dict[str, Any],
 ) -> str:
+    selected_model = model or integration.default_stt_model or integration.default_model or DEFAULT_DEEPGRAM_MODEL
+    if selected_model.startswith("flux-"):
+        return await _deepgram_flux_transcribe_stream(
+            websocket=websocket, queue=queue, integration=integration,
+            model=selected_model, metadata=metadata,
+        )
     api_key = _integration_api_key(integration, "STT")
     sample_rate = int(_ws_metadata_value(metadata, "sample_rate", DEFAULT_HA_STT_SAMPLE_RATE) or DEFAULT_HA_STT_SAMPLE_RATE)
     channels = int(_ws_metadata_value(metadata, "channel", DEFAULT_HA_STT_CHANNELS) or DEFAULT_HA_STT_CHANNELS)
@@ -3678,9 +3720,52 @@ async def _deepgram_transcribe_stream(
                         break
         finally:
             sender_task.cancel()
-            with suppress(Exception):
+            with suppress(asyncio.CancelledError):
                 await sender_task
         return " ".join(final_parts).strip() or latest_partial.strip()
+
+
+async def _deepgram_flux_transcribe_stream(
+    *, websocket, queue, integration: IntegrationConfig, model: str,
+    metadata: dict[str, Any],
+) -> str:
+    """Stream Flux turns through HA Assist without buffering the utterance first."""
+
+    sample_rate = int(_ws_metadata_value(metadata, "sample_rate", 16000) or 16000)
+    params = {"model": model, "encoding": "linear16", "sample_rate": sample_rate}
+    language = _normalize_language_hint(str(_ws_metadata_value(metadata, "language", "")))
+    if language and model == "flux-general-multi":
+        params["language_hint"] = language
+    headers = {"Authorization": f"Token {_integration_api_key(integration, 'STT')}"}
+    url = f"wss://api.deepgram.com/v2/listen?{urlencode(params)}"
+    async with _websocket_connect(url, headers) as provider_ws:
+        async def sender():
+            while (chunk := await queue.get()) is not None:
+                payload = _pcm_stream_payload(chunk)
+                if payload:
+                    await provider_ws.send(payload)
+            await provider_ws.send(json.dumps({"type": "CloseStream"}))
+
+        sending = asyncio.create_task(sender())
+        transcript = ""
+        try:
+            async with asyncio.timeout(45):
+                async for raw in provider_ws:
+                    message = json.loads(raw)
+                    if message.get("type") == "Error":
+                        raise RuntimeError(message.get("description") or message.get("code") or "Deepgram Flux failed")
+                    if message.get("type") != "TurnInfo":
+                        continue
+                    transcript = str(message.get("transcript") or "").strip()
+                    if transcript:
+                        await _send_ws_json(websocket, {"type": "partial", "text": transcript})
+                    if message.get("event") == "EndOfTurn":
+                        break
+            return transcript
+        finally:
+            sending.cancel()
+            with suppress(asyncio.CancelledError):
+                await sending
 
 
 def _gradium_input_format(sample_rate: int) -> tuple[str, int]:
@@ -3773,7 +3858,7 @@ async def _soniox_transcribe_stream(
                         break
         finally:
             sender_task.cancel()
-            with suppress(Exception):
+            with suppress(asyncio.CancelledError):
                 await sender_task
     return "".join(final_tokens).strip() or latest_partial.strip()
 
@@ -3890,7 +3975,7 @@ async def _gradium_transcribe_stream(
                         break
         finally:
             sender_task.cancel()
-            with suppress(Exception):
+            with suppress(asyncio.CancelledError):
                 await sender_task
     return " ".join(parts).strip() or latest_partial.strip()
 
@@ -3916,7 +4001,9 @@ def _speechmatics_transcript_text(data: dict[str, Any]) -> str:
 
 def _speechmatics_model(model: str, integration: IntegrationConfig) -> str:
     candidate = (model or integration.default_stt_model or integration.default_model or DEFAULT_SPEECHMATICS_MODEL).strip()
-    return candidate if candidate in {"standard", "enhanced", "melia-1"} else DEFAULT_SPEECHMATICS_MODEL
+    if candidate not in {"standard", "enhanced", "melia-1", "linden-1"}:
+        raise RuntimeError(f"Unsupported Speechmatics model: {candidate}")
+    return candidate
 
 
 async def _speechmatics_transcribe_stream(
@@ -3954,6 +4041,11 @@ async def _speechmatics_transcribe_stream(
     }
 
     url = "wss://eu.rt.speechmatics.com/v2"
+    if stt_model == "linden-1":
+        url = "wss://eu2.rt.speechmatics.com/v2/agent"
+        start_message["turn_config"] = {"turn_detection_mode": "vad"}
+        for key in ("max_delay", "max_delay_mode", "conversation_config"):
+            start_message["transcription_config"].pop(key, None)
     logger.info(
         "HA Assist Speechmatics STT streaming started integration={} model={} language={} sample_rate={}",
         integration.name,
@@ -3977,7 +4069,7 @@ async def _speechmatics_transcribe_stream(
                 await provider_ws.send(payload)
                 seq_no += 1
             await provider_ws.send(
-                json.dumps({"message": "EndOfStream", "last_seq_no": max(seq_no - 1, 0)})
+                json.dumps({"message": "EndOfStream", "last_seq_no": seq_no})
             )
 
         sender_task = asyncio.create_task(sender())
@@ -3990,13 +4082,13 @@ async def _speechmatics_transcribe_stream(
                     message = str(data.get("message") or "")
                     if message in {"RecognitionStarted", "AudioAdded", "Info"}:
                         continue
-                    if message == "AddPartialTranscript":
-                        latest_partial = _speechmatics_transcript_text(data)
+                    if message in {"AddPartialTranscript", "AddPartialSegment"}:
+                        latest_partial = str((data.get("segment") or {}).get("transcript") or "") if message == "AddPartialSegment" else _speechmatics_transcript_text(data)
                         if latest_partial and websocket:
                             await _send_ws_json(websocket, {"type": "partial", "text": latest_partial})
                         continue
-                    if message == "AddTranscript":
-                        transcript = _speechmatics_transcript_text(data)
+                    if message in {"AddTranscript", "AddSegment"}:
+                        transcript = str((data.get("segment") or {}).get("transcript") or "") if message == "AddSegment" else _speechmatics_transcript_text(data)
                         if transcript:
                             final_parts.append(transcript)
                         continue
@@ -4006,7 +4098,7 @@ async def _speechmatics_transcribe_stream(
                         raise RuntimeError(data.get("reason") or data.get("type") or "Speechmatics STT failed")
         finally:
             sender_task.cancel()
-            with suppress(Exception):
+            with suppress(asyncio.CancelledError):
                 await sender_task
 
     return " ".join(final_parts).strip() or latest_partial.strip()
@@ -4200,37 +4292,6 @@ def _integration_api_key(
     return api_key
 
 
-def _openai_base_url(integration: IntegrationConfig | None) -> str:
-    """Return the custom OpenAI API base URL, or "" to use api.openai.com."""
-    if not integration or integration.kind not in {"openai", "openai_cloud"}:
-        return ""
-    return (integration.base_url or "").strip().rstrip("/")
-
-
-def _openai_realtime_url(integration: IntegrationConfig | None) -> str:
-    """Map an http(s) base URL such as http://host:8000/v1 to its realtime WebSocket URL."""
-    base_url = _openai_base_url(integration)
-    if not base_url:
-        return OPENAI_REALTIME_URL
-    if base_url.startswith("https://"):
-        base_url = "wss://" + base_url[len("https://") :]
-    elif base_url.startswith("http://"):
-        base_url = "ws://" + base_url[len("http://") :]
-    if not base_url.endswith("/realtime"):
-        base_url += "/realtime"
-    return base_url
-
-
-def _openai_api_key(integration: IntegrationConfig, role: str, fallback: str = "") -> str:
-    """Like _integration_api_key, but a custom base URL may run without a key.
-
-    The global OpenAI key is never sent to a custom base URL.
-    """
-    if _openai_base_url(integration):
-        return (integration.api_key or "").strip() or LOCAL_API_KEY_PLACEHOLDER
-    return _integration_api_key(integration, role, fallback)
-
-
 def _openai_api_key_or_400(integration: IntegrationConfig, role: str, fallback: str = "") -> str:
     try:
         return _openai_api_key(integration, role, fallback)
@@ -4268,7 +4329,10 @@ def _step_model_for(
     if not integration:
         return fallback.strip()
     if capability == "stt":
-        return (integration.default_stt_model or fallback).strip()
+        provider_model = integration.default_model if integration.kind in {
+            "soniox", "deepgram", "speechmatics", "gradium"
+        } else ""
+        return (integration.default_stt_model or provider_model or fallback).strip()
     if capability == "tts":
         return (integration.default_tts_model or integration.default_model or fallback).strip()
     if capability == "realtime":
@@ -4361,6 +4425,25 @@ def _runtime_flow_errors(config: RuntimeConfig, flow: FlowConfig) -> list[str]:
             continue
         if not integration.enabled:
             errors.append(f"{integration.name} is disabled.")
+        if kind == "stt":
+            vad_step = _enabled_step(flow, "vad")
+            provider_turns = not vad_step or (vad_step.settings or {}).get("mode") == "provider"
+            stt_model = _step_model_for(step, integration, "stt")
+            if integration.kind == "deepgram":
+                if stt_model.startswith("flux-") and not provider_turns:
+                    errors.append("Deepgram Flux manages turns itself. Select Provider-managed in the Turn step or remove that step.")
+                elif not stt_model.startswith("flux-") and provider_turns:
+                    errors.append("Deepgram Nova needs a Turn step with Speech timeout or Smart Turn. Use Flux for provider-managed turns.")
+            if integration.kind == "speechmatics" and stt_model != "linden-1" and provider_turns:
+                errors.append("Speechmatics Realtime needs a local Turn step. Select Linden 1 for provider-managed Agent STT turns.")
+        if kind == "stt" and integration.kind == "deepgram":
+            model = _step_model_for(step, integration, "stt")
+            language = _runtime_language(flow, integration).replace("_", "-").split("-")[0].lower()
+            flux_languages = {"en"} if model == "flux-general-en" else {
+                "de", "en", "es", "fr", "hi", "it", "ja", "nl", "pt", "ru"
+            }
+            if model.startswith("flux-") and language not in flux_languages:
+                errors.append(f"Deepgram {model} does not support language {language}. Choose a supported language or Nova 3.")
 
     return errors
 
@@ -4414,6 +4497,8 @@ def _model_name(
         or (integration.default_realtime_model if integration else "")
     ).strip()
     kind = integration.kind if integration else provider_kind
+    if kind == "openai" and _openai_base_url(integration):
+        return model
     if kind == "gemini" and not _realtime_model_matches_provider(
         "gemini",
         model,
@@ -4429,6 +4514,9 @@ def _model_name(
 
 def _openai_voice(flow: FlowConfig, integration: IntegrationConfig | None) -> str:
     output_step = _output_step(flow)
+    if _openai_base_url(integration):
+        return ((output_step.voice if output_step else "") or
+                integration.default_voice or flow.voice or DEFAULT_OPENAI_REALTIME_VOICE)
     for candidate in (
         output_step.voice if output_step else "",
         flow.voice,
@@ -4496,6 +4584,34 @@ def _composed_vad_analyzer(flow: FlowConfig):
             stop_secs=stop_secs_by_eagerness.get(flow.vad_eagerness, 0.45),
             min_volume=0.02,
         )
+    )
+
+
+def _composed_user_params(flow: FlowConfig, stt=None) -> LLMUserAggregatorParams:
+    """Use one turn controller, preserving the saved timing unless Smart Turn is selected."""
+
+    from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+    from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies, UserTurnStrategies
+
+    step = _enabled_step(flow, "vad")
+    mode = (step.settings or {}).get("mode", "speech_timeout") if step else "provider"
+    provider_turns = getattr(stt, "_settings", None)
+    provider_turns = getattr(provider_turns, "model", "")
+    if mode == "provider" or str(provider_turns).startswith("flux-"):
+        return LLMUserAggregatorParams(
+            user_turn_strategies=ExternalUserTurnStrategies(),
+            user_turn_stop_timeout=2.0,
+        )
+    if mode == "smart_turn":
+        # Pipecat's default strategies use the bundled local Smart Turn 3.2 ONNX model.
+        strategies = UserTurnStrategies()
+    else:
+        strategies = UserTurnStrategies(
+            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.2)]
+        )
+    return LLMUserAggregatorParams(
+        user_turn_strategies=strategies,
+        user_turn_stop_timeout=2.0,
     )
 
 
@@ -4625,6 +4741,8 @@ def _build_stt_service(
     integration = _require_integration(integration, "STT", fields=())
     model = _step_model_for(step, integration, "stt")
     language = _runtime_language(flow, integration, language_override)
+    vad_step = _enabled_step(flow, "vad")
+    provider_turns = not vad_step or (vad_step.settings or {}).get("mode") == "provider"
     logger.info(
         "Building composed STT service integration={} kind={} model={} language={}",
         integration.name,
@@ -4638,23 +4756,45 @@ def _build_stt_service(
 
         return SonioxSTTService(
             api_key=_integration_api_key(integration, "STT"),
-            settings=SonioxSTTService.Settings(model=model or None),
+            vad_force_turn_endpoint=not provider_turns,
+            settings=SonioxSTTService.Settings(model=model or None, language=_pipecat_language(language)),
         )
     if integration.kind == "deepgram":
+        if (model or integration.default_model).startswith("flux-"):
+            from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
+
+            return DeepgramFluxSTTService(
+                api_key=_integration_api_key(integration, "STT"),
+                settings=DeepgramFluxSTTService.Settings(
+                    model=model or integration.default_model,
+                    language=_pipecat_language(language),
+                ),
+            )
         from pipecat.services.deepgram.stt import DeepgramSTTService
 
         return DeepgramSTTService(
             api_key=_integration_api_key(integration, "STT"),
-            settings=DeepgramSTTService.Settings(model=model or None),
+            settings=DeepgramSTTService.Settings(
+                model=model or integration.default_model or DEFAULT_DEEPGRAM_MODEL,
+                language=_pipecat_language(language),
+            ),
         )
     if integration.kind == "speechmatics":
-        from pipecat.services.speechmatics.stt import SpeechmaticsSTTService
+        if (model or DEFAULT_SPEECHMATICS_MODEL) != "linden-1":
+            from app.speechmatics_legacy import SpeechmaticsRealtimeSTTService
+
+            return SpeechmaticsRealtimeSTTService(
+                api_key=_integration_api_key(integration, "STT"),
+                model=_speechmatics_model(model, integration), language=_pipecat_language(language),
+            )
+        from pipecat.services.speechmatics.stt import SpeechmaticsSTTService, TurnDetectionMode
 
         return SpeechmaticsSTTService(
             api_key=_integration_api_key(integration, "STT"),
             settings=SpeechmaticsSTTService.Settings(
                 model=model or None,
                 language=_pipecat_language(language),
+                turn_detection_mode=TurnDetectionMode.VAD if provider_turns else TurnDetectionMode.EXTERNAL,
             ),
         )
     if integration.kind == "gradium":
@@ -4662,7 +4802,8 @@ def _build_stt_service(
 
         return GradiumSTTService(
             api_key=_integration_api_key(integration, "STT"),
-            settings=GradiumSTTService.Settings(model=model or None),
+            enable_turn_detection=provider_turns,
+            settings=GradiumSTTService.Settings(model=model or None, language=_pipecat_language(language)),
         )
     if integration.kind in {"openai", "openai_cloud"}:
         from pipecat.services.openai.stt import OpenAIRealtimeSTTService
@@ -4670,8 +4811,11 @@ def _build_stt_service(
         return OpenAIRealtimeSTTService(
             api_key=_openai_api_key(integration, "STT", config.openai_api_key),
             base_url=_openai_realtime_url(integration),
-            model=model or DEFAULT_OPENAI_STT_MODEL,
-            language=language,
+            turn_detection={"type": "server_vad"} if provider_turns else False,
+            settings=OpenAIRealtimeSTTService.Settings(
+                model=model or DEFAULT_OPENAI_STT_MODEL,
+                language=_pipecat_language(language),
+            ),
         )
 
     raise RuntimeError(f"STT provider {integration.kind} is not supported by composed runtime")
@@ -4685,9 +4829,7 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
     if integration.kind in {"openai", "openai_cloud"}:
         from pipecat.services.openai.llm import OpenAILLMService
 
-        api_key = integration.api_key or config.openai_api_key
-        if not api_key:
-            raise RuntimeError("OpenAI is missing api_key")
+        api_key = _openai_api_key(integration, "LLM", config.openai_api_key)
         settings_kwargs: dict[str, Any] = {
             "model": model or DEFAULT_OPENAI_TEXT_MODEL,
             "system_instruction": _effective_instructions(flow),
@@ -4696,6 +4838,7 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
             settings_kwargs["max_tokens"] = flow.max_output_tokens
         return OpenAILLMService(
             api_key=api_key,
+            base_url=_openai_base_url(integration) or None,
             organization=integration.organization or None,
             project=integration.project or None,
             settings=OpenAILLMService.Settings(**settings_kwargs),
@@ -4730,6 +4873,31 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
             aws_session_token=integration.token or None,
             aws_region=integration.region or "us-east-1",
             settings=AWSBedrockLLMService.Settings(**settings_kwargs),
+        )
+    if integration.kind == "anthropic":
+        from pipecat.services.anthropic.llm import AnthropicLLMService
+
+        return AnthropicLLMService(
+            api_key=_integration_api_key(integration, "LLM"),
+            settings=AnthropicLLMService.Settings(
+                model=model or "claude-sonnet-4-5",
+                system_instruction=_effective_instructions(flow),
+                max_tokens=flow.max_output_tokens or 4096,
+            ),
+        )
+    if integration.kind == "azure_openai":
+        from pipecat.services.azure.llm import AzureLLMService
+
+        if not integration.endpoint or not integration.deployment:
+            raise RuntimeError("Azure OpenAI requires an endpoint and deployment")
+        return AzureLLMService(
+            api_key=_integration_api_key(integration, "LLM"),
+            endpoint=integration.endpoint,
+            settings=AzureLLMService.Settings(
+                model=integration.deployment,
+                system_instruction=_effective_instructions(flow),
+                max_tokens=flow.max_output_tokens or 4096,
+            ),
         )
     if integration.kind == "openai_compatible":
         from pipecat.services.openai.llm import OpenAILLMService
@@ -4815,6 +4983,7 @@ def _build_tts_service(config: RuntimeConfig, flow: FlowConfig):
             text_aggregation_mode=text_aggregation_mode,
             settings=GoogleTTSService.Settings(
                 voice=voice or DEFAULT_GOOGLE_TTS_VOICE,
+                speaking_rate=speed,
             ),
         )
     if integration.kind == "elevenlabs":
@@ -4857,8 +5026,39 @@ def _flow_enabled(flow: FlowConfig) -> bool:
     return bool(flow.conversation_flow.get("enabled"))
 
 
+def _flow_global_functions(tools_schema, bridge, local_tools):
+    """Keep enabled MCP and search tools available while a conversation flow runs."""
+
+    from pipecat.flows import FlowsFunctionSchema
+
+    functions = []
+    local_by_name = {tool.name: tool for tool in local_tools}
+    for tool in tools_schema.standard_tools if tools_schema else []:
+        async def handler(args, flow_manager, *, name=tool.name):
+            if name in local_by_name:
+                result = None
+
+                async def result_callback(value, **kwargs):
+                    nonlocal result
+                    result = value
+
+                from types import SimpleNamespace
+
+                await local_by_name[name].handler(
+                    SimpleNamespace(arguments=args, result_callback=result_callback)
+                )
+                return result, None
+            return await bridge.call_tool(name, dict(args or {})), None
+
+        functions.append(FlowsFunctionSchema(
+            name=tool.name, description=tool.description, properties=tool.properties,
+            required=tool.required, handler=handler,
+        ))
+    return functions
+
+
 def _flow_node_configs(flow: FlowConfig, bridge: CombinedMCPBridge | None):
-    from pipecat_flows import FlowsFunctionSchema
+    from pipecat.flows import FlowsFunctionSchema
 
     nodes = flow.conversation_flow.get("nodes") or []
     by_id: dict[str, dict[str, Any]] = {}
@@ -4919,9 +5119,13 @@ def _flow_node_configs(flow: FlowConfig, bridge: CombinedMCPBridge | None):
                 )
             )
 
+        node_role = _messages_text(data.get("role_messages"), str(data.get("role_message") or ""))
+        role_message = _effective_instructions(flow)
+        if node_role and node_role != role_message:
+            role_message += f"\n\n{node_role}"
         config_node: dict[str, Any] = {
             "name": node_id,
-            "role_message": _messages_text(data.get("role_messages"), str(data.get("role_message") or _effective_instructions(flow))),
+            "role_message": role_message,
             "task_messages": data.get("task_messages") if isinstance(data.get("task_messages"), list) else [
                 {
                     "role": "developer",
@@ -4966,6 +5170,22 @@ async def run_bot(
 ):
     """Run one Pipecat session."""
 
+    servers = config.enabled_mcp_servers(mcp_token) if flow.mcp_enabled else []
+    if not servers:
+        return await _run_bot_session(transport, runner_args, config, flow)
+    async with CombinedMCPBridge(servers, flow.mcp_tool_allowlist) as bridge:
+        return await _run_bot_session(transport, runner_args, config, flow, bridge)
+
+
+async def _run_bot_session(
+    transport: BaseTransport,
+    runner_args: RunnerArguments,
+    config: RuntimeConfig,
+    flow: FlowConfig,
+    bridge: CombinedMCPBridge | None = None,
+):
+    """Build and run a session within the MCP connection's lifetime."""
+
     integration = config.model_integration(flow)
     provider_kind = integration.kind if integration else flow.provider_id
     runtime_mode = _runtime_mode(flow, provider_kind)
@@ -4974,11 +5194,8 @@ async def run_bot(
     client_id = _session_client_id(runner_args, flow)
     language_override = str(session_body.get("language") or "").strip() or None
 
-    bridge: CombinedMCPBridge | None = None
     mcp_tools_schema = None
-    mcp_servers = config.enabled_mcp_servers(mcp_token) if flow.mcp_enabled else []
-    if mcp_servers:
-        bridge = CombinedMCPBridge(mcp_servers, flow.mcp_tool_allowlist)
+    if bridge:
         try:
             await bridge.start()
             mcp_tools_schema = await bridge.tools_schema(
@@ -5000,6 +5217,7 @@ async def run_bot(
 
     local_tool_schemas = [schema for schema in [_web_search_tool_schema(config, flow)] if schema]
     tools_schema = _merge_tools_schema(mcp_tools_schema, local_tool_schemas)
+    flow = _flow_with_mcp_context(flow, bridge)
     context_for_memory = None
     audio_debug = None
 
@@ -5147,8 +5365,6 @@ async def run_bot(
 
     else:
         from pipecat.processors.audio.vad_processor import VADProcessor
-        from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
-        from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
         stt = _build_stt_service(config, flow, language_override=language_override)
         llm = _build_llm_service(config, flow, tools_schema=tools_schema)
@@ -5186,19 +5402,14 @@ async def run_bot(
         context = LLMContext(context_messages, active_tools_schema) if active_tools_schema else LLMContext(context_messages)
         context_for_memory = context
         vad_step = _enabled_step(flow, "vad")
-        vad_processor = VADProcessor(vad_analyzer=_composed_vad_analyzer(flow)) if vad_step else None
-        if vad_step:
-            context_aggregator = LLMContextAggregatorPair(
-                context,
-                user_params=LLMUserAggregatorParams(
-                    user_turn_strategies=UserTurnStrategies(
-                        stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.2)]
-                    ),
-                    user_turn_stop_timeout=2.0,
-                ),
-            )
-        else:
-            context_aggregator = LLMContextAggregatorPair(context)
+        provider_turns = not vad_step or (vad_step.settings or {}).get("mode") == "provider"
+        flux_turns = bool(stt_integration and stt_integration.kind == "deepgram" and
+                          _step_model_for(_enabled_step(flow, "stt"), stt_integration, "stt").startswith("flux-"))
+        vad_processor = VADProcessor(vad_analyzer=_composed_vad_analyzer(flow)) if vad_step and not provider_turns and not flux_turns else None
+        context_aggregator = LLMContextAggregatorPair(
+            context,
+            user_params=_composed_user_params(flow, stt),
+        )
 
         if bridge and mcp_tools_schema and not _flow_enabled(flow):
             await bridge.register_tools_schema(mcp_tools_schema, llm)
@@ -5236,13 +5447,14 @@ async def run_bot(
         )
         flow_manager = None
         if initial_flow_node:
-            from pipecat_flows import FlowManager
+            from pipecat.flows import FlowManager
 
             flow_manager = FlowManager(
                 worker=worker,
                 llm=llm,
                 context_aggregator=context_aggregator,
                 transport=transport,
+                global_functions=_flow_global_functions(tools_schema, bridge, local_tool_schemas),
             )
 
         @transport.event_handler("on_client_connected")
@@ -5270,8 +5482,6 @@ async def run_bot(
                 enabled=_memory_enabled(config, flow),
                 max_messages=config.session_memory_max_messages,
             )
-        if bridge:
-            await bridge.close()
         if audio_debug:
             with suppress(Exception):
                 audio_debug.close()

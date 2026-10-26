@@ -1,17 +1,16 @@
 [project]
 name = "pipecat-assist"
-version = "0.1.79"
+version = "0.2.0"
 description = "Home Assistant add-on for Pipecat realtime assistants"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.115.0",
-    "aiohttp>=3.9.0",
+    "aiohttp>=3.14.4,<4",
     "httpx>=0.28.0",
     "loguru>=0.7.2",
     "openai>=1.99.0",
     "pillow>=10.0.0",
-    "pipecat-ai[runner,openai,google,fal,mcp,webrtc,websocket,silero,deepgram,soniox,cartesia,gradium,speechmatics,elevenlabs,aws,aws-nova-sonic]>=1.4.0,<1.5.0",
-    "pipecat-ai-flows>=1.3.0,<1.4.0",
+    "pipecat-ai[runner,openai,google,mcp,webrtc,websocket,deepgram,speechmatics,anthropic,aws,aws-nova-sonic]==1.14.0",
     "pydantic>=2.8.0",
     "python-dotenv>=1.0.1",
     "uvicorn[standard]>=0.30.0",

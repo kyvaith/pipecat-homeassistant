@@ -27,6 +27,16 @@ jobs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Check release versions
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          python -m pip install PyYAML
+          python -m unittest discover -s tests -p test_release_metadata.py -v
+          python -c 'import os, tomllib; version = tomllib.load(open("addons/pipecat_assist/pyproject.toml", "rb"))["project"]["version"]; assert os.environ["RELEASE_TAG"] == f"v{version}", "Tag does not match package versions"'
       - name: Prepare build matrix
         id: matrix
         uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.06.0
@@ -114,6 +124,7 @@ jobs:
 
   legacy-amd64:
     name: Build legacy amd64
+    needs: init
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

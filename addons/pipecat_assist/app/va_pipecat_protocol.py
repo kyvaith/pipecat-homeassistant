@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -37,10 +38,15 @@ def _merge_stream_text(previous: str, fragment: str) -> str:
         return fragment
     if previous.startswith(fragment) or previous.endswith(fragment):
         return previous
+    if re.search(r"(?<!\w)" + re.escape(fragment) + r"(?!\w)", previous):
+        return previous
 
     max_overlap = min(len(previous), len(fragment))
     for overlap in range(max_overlap, 0, -1):
-        if previous[-overlap:] == fragment[:overlap]:
+        boundary = len(previous) - overlap
+        if previous[-overlap:] == fragment[:overlap] and (
+            boundary == 0 or not previous[boundary - 1].isalnum()
+        ):
             return previous + fragment[overlap:]
 
     separator = "" if fragment[0] in ",.;:!?)]}" else " "
@@ -239,7 +245,9 @@ class VaPipecatProtocol:
             return self.phase_message("thinking")
 
         if message_type == "user-transcription":
-            self.user_text = _merge_stream_text(self.user_text, str(data.get("text") or ""))
+            self.user_text = _merge_stream_text(
+                self.user_text, str(data.get("text") or "")
+            )
             final = bool(data.get("final"))
             if final:
                 self.last_user_text = self.user_text
@@ -300,6 +308,15 @@ class VaPipecatProtocol:
                 return None
             if self.assistant_segments and self.assistant_segments[-1] == text:
                 return None
+            if (
+                priority > self.assistant_priority
+                and self.assistant_text
+                and not (
+                    self.assistant_text.startswith(text) or text in self.assistant_text
+                )
+            ):
+                self.assistant_text = ""
+                self.assistant_segments.clear()
             self.assistant_priority = max(self.assistant_priority, priority)
             self.assistant_segments.append(text)
             self.assistant_text = _merge_stream_text(self.assistant_text, text)
@@ -349,7 +366,9 @@ class VaPipecatProtocol:
         if message_type in {"error", "error-response"}:
             return self.error_message(
                 str(data.get("code") or message_type),
-                str(data.get("message") or data.get("error") or "Pipecat pipeline error"),
+                str(
+                    data.get("message") or data.get("error") or "Pipecat pipeline error"
+                ),
             )
 
         return None
