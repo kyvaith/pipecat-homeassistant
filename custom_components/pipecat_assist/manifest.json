@@ -1,6 +1,7 @@
 {
   "domain": "pipecat_assist",
   "name": "Pipecat Assist",
+  "categories": ["ai_voice.voice_assistants"],
   "codeowners": ["@kyvaith"],
   "config_flow": true,
   "dependencies": ["ai_task", "conversation", "frontend", "http", "lovelace", "stt", "tts"],
