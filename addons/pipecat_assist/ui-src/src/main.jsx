@@ -33,6 +33,7 @@ import {
   X,
 } from "lucide-react";
 import "./styles.css";
+import { createId } from "./id.mjs";
 
 const UI_TRANSLATIONS = {
   pl: {
@@ -58,6 +59,10 @@ const UI_TRANSLATIONS = {
     "Save": "Zapisz",
     "Save pipeline": "Zapisz pipeline",
     "Save integration": "Zapisz integrację",
+    "Delegation": "Delegowanie",
+    "Backend integration": "Integracja zaplecza",
+    "Backend model": "Model zaplecza",
+    "Live WebSocket endpoint (optional)": "Adres WebSocket Live (opcjonalny)",
     "Save runtime": "Zapisz runtime",
     "Reset defaults": "Przywróć domyślne",
     "Pipeline is valid.": "Pipeline jest poprawny.",
@@ -154,7 +159,7 @@ const OPUS_AUDIO_QUALITY_PARAMS = {
   usedtx: "0",
 };
 const OPUS_AUDIO_REMOVE_PARAMS = new Set(["stereo", "sprop-stereo"]);
-const ASSISTANT_CARD_VERSION = "0.2.4";
+const ASSISTANT_CARD_VERSION = "0.2.5";
 const ASSISTANT_CARD_ACCENT_HEX = "#206cff";
 const ASSISTANT_CARD_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -566,6 +571,7 @@ const OPENAI_REALTIME_VOICES = [
 
 const providerKinds = [
   ["openai", "OpenAI Realtime", Radio],
+  ["openai_live", "OpenAI GPT-Live", Radio],
   ["openai_cloud", "OpenAI Cloud", Cloud],
   ["gemini", "Google Gemini Live", Radio],
   ["gemini_cloud", "Google Gemini Cloud", Cloud],
@@ -596,6 +602,7 @@ const protectedIntegrationIds = [
   "gemini",
   "gemini-cloud",
   "openai",
+  "openai-live",
   "openai-cloud",
   "ha-mcp",
   "ha-mcp-server",
@@ -637,6 +644,7 @@ const stepTypes = [
 ];
 
 const addableStepTypes = stepTypes.filter(([kind]) => !["transport", "output"].includes(kind));
+const speechToSpeechProviders = ["gemini", "openai", "openai_live", "aws_nova_sonic"];
 
 const stepProviders = {
   stt: ["soniox", "deepgram", "speechmatics", "gradium", "openai_cloud"],
@@ -644,12 +652,12 @@ const stepProviders = {
   tts: ["cartesia", "gradium", "google_cloud_tts", "google_streaming_tts", "elevenlabs", "openai_cloud", "soniox"],
   tools: ["home_assistant_mcp", "ha_mcp", "mcp_server"],
   web_search: ["web_search"],
-  output: ["gemini", "openai", "aws_nova_sonic"],
+  output: speechToSpeechProviders,
 };
 const runtimeStepOrder = ["transport", "memory", "vad", "stt", "llm", "web_search", "tools", "flow", "tts", "output"];
 
 function allowedProvidersForStep(kind, mode) {
-  if (kind === "llm" && mode === "realtime") return ["gemini", "openai", "aws_nova_sonic"];
+  if (kind === "llm" && mode === "realtime") return speechToSpeechProviders;
   if (kind === "output" && mode === "composed") return [];
   return stepProviders[kind] || null;
 }
@@ -694,6 +702,23 @@ const templates = [
       ["web_search", "web_search", "Web Search", "web-search"],
       ["tools", "tools", "HA MCP tools", "ha-mcp"],
       ["output", "output", "Audio output", "openai"],
+    ],
+  },
+  {
+    id: "openai_live",
+    label: "OpenAI GPT-Live",
+    icon: Radio,
+    group: "Speech-to-speech",
+    mode: "realtime",
+    provider: "openai-live",
+    accent: "green",
+    steps: [
+      ["transport", "transport", "SmallWebRTC", ""],
+      ["memory", "memory", "Session memory", ""],
+      ["llm", "llm", "Live model", "openai-live"],
+      ["web_search", "web_search", "Web Search", "web-search"],
+      ["tools", "tools", "HA MCP tools", "ha-mcp"],
+      ["output", "output", "Native audio", "openai-live"],
     ],
   },
   {
@@ -1405,7 +1430,7 @@ function makeFlowNodeId(label, nodes) {
 
 function makeStep(kind, label, integrationId = "", suffix = "") {
   return {
-    id: `${kind}-${suffix || crypto.randomUUID().slice(0, 8)}`,
+    id: `${kind}-${suffix || createId().slice(0, 8)}`,
     kind,
     label,
     enabled: kind !== "flow",
@@ -1435,6 +1460,9 @@ function providerDefaults(provider) {
       model: OPENAI_REALTIME_MODEL,
       voice: OPENAI_REALTIME_VOICE,
     };
+  }
+  if (provider === "openai_live" || provider === "openai-live") {
+    return { model: "gpt-live-1", text_model: OPENAI_TEXT_MODEL, voice: OPENAI_REALTIME_VOICE };
   }
   if (provider === "openai_cloud" || provider === "openai-cloud") {
     return {
@@ -1591,7 +1619,7 @@ function deriveFlowMode(flow, config) {
   const hasTts = steps.some((step) => step.kind === "tts" && step.enabled);
   const llm = steps.find((step) => step.kind === "llm" && step.enabled);
   const providerKind = providerKindForIntegration(config, llm?.integration_id || flow.provider_id);
-  if (!hasStt && !hasTts && ["gemini", "openai", "aws_nova_sonic"].includes(providerKind)) {
+  if (!hasStt && !hasTts && speechToSpeechProviders.includes(providerKind)) {
     return "realtime";
   }
   return "composed";
@@ -4220,6 +4248,35 @@ function IntegrationSettings({
     );
   }
 
+  if (integration.kind === "openai_live") {
+    const backends = config.integrations.filter((item) => stepProviders.llm.includes(item.kind));
+    const selectedBackend = integration.delegation_integration_id || "";
+    return (
+      <>
+        <SettingsSection title="Credentials" status={secretStatus(integration, "api_key")}>
+          <SecretSetting integration={integration} field="api_key" label="OpenAI API key" updateIntegration={updateIntegration} />
+          <TextSetting integration={integration} field="base_url" label={t("Live WebSocket endpoint (optional)")} updateIntegration={updateIntegration} wide />
+        </SettingsSection>
+        <SettingsSection title="Realtime">
+          <TextSetting integration={integration} field="default_realtime_model" label="Live model" updateIntegration={updateIntegration} />
+          <TextSetting integration={integration} field="default_voice" label="Voice" updateIntegration={updateIntegration} />
+        </SettingsSection>
+        <SettingsSection title={t("Delegation")}>
+          <Field label={t("Backend integration")}>
+            <select value={selectedBackend} onChange={(event) => updateIntegration((draft) => ({ ...draft, delegation_integration_id: event.target.value }))}>
+              <option value="">OpenAI Responses</option>
+              {selectedBackend && !backends.some((item) => item.id === selectedBackend) && (
+                <option value={selectedBackend} disabled>{selectedBackend}</option>
+              )}
+              {backends.map((item) => <option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}</option>)}
+            </select>
+          </Field>
+          {!selectedBackend && <TextSetting integration={integration} field="default_model" label={t("Backend model")} updateIntegration={updateIntegration} />}
+        </SettingsSection>
+      </>
+    );
+  }
+
   if (integration.kind === "openai_cloud") {
     return (
       <>
@@ -4723,7 +4780,7 @@ function browserClientId() {
   try {
     const existing = localStorage.getItem(key);
     if (existing) return existing;
-    const created = crypto.randomUUID();
+    const created = createId();
     localStorage.setItem(key, created);
     return created;
   } catch {
@@ -5643,7 +5700,7 @@ function VoiceTest({ config, flow }) {
       channelRef.current.send(
         JSON.stringify({
           label: "rtvi-ai",
-          id: crypto.randomUUID().slice(0, 8),
+          id: createId().slice(0, 8),
           type: "disconnect-bot",
           data: {},
         }),
@@ -5756,7 +5813,7 @@ function VoiceTest({ config, flow }) {
         channel.send(
           JSON.stringify({
             label: "rtvi-ai",
-            id: crypto.randomUUID().slice(0, 8),
+            id: createId().slice(0, 8),
             type: "client-ready",
           data: {
               version: "1.4.0",
