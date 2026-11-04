@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.4
+
+- Install and start the Pipecat Assist app from the Home Assistant integration
+  wizard. The wizard adds the official app repository only after confirmation
+  and waits until the server responds.
+- Detect an already-installed app, offer to start a stopped app, and keep the
+  option to connect to an existing server. The wizard is available in English
+  and Polish.
+
 ## 0.2.3
 
 - Add HACS and Home Assistant Marketplace integration metadata.
