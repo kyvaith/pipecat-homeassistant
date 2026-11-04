@@ -1,0 +1,47 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Zainstaluj Pipecat Assist",
+        "description": "Aplikacja Pipecat Assist nie jest zainstalowana. Home Assistant może dodać [{repository}]({repository}) do sklepu z aplikacjami, a następnie zainstalować i uruchomić Pipecat Assist.",
+        "menu_options": {
+          "install_app": "Zainstaluj i uruchom Pipecat Assist",
+          "manual": "Połącz z istniejącym serwerem"
+        }
+      },
+      "app_stopped": {
+        "title": "Uruchom Pipecat Assist",
+        "description": "Aplikacja Pipecat Assist jest zainstalowana, ale nie działa.",
+        "menu_options": {
+          "start_app": "Uruchom Pipecat Assist",
+          "manual": "Połącz z istniejącym serwerem"
+        }
+      },
+      "app_setup_failed": {
+        "title": "Nie udało się skonfigurować Pipecat Assist",
+        "description": "Home Assistant nie mógł przygotować aplikacji Pipecat Assist lub się z nią połączyć. Sprawdź logi Home Assistanta i aplikacji, a następnie spróbuj ponownie albo połącz się z istniejącym serwerem.",
+        "menu_options": {
+          "setup_app": "Ponów konfigurację aplikacji",
+          "manual": "Połącz z istniejącym serwerem"
+        }
+      },
+      "manual": {
+        "title": "Pipecat Assist",
+        "description": "Połącz Home Assistant z działającym serwerem Pipecat Assist.",
+        "data": {
+          "url": "Adres Pipecat Assist"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nie można połączyć się z Pipecat Assist."
+    },
+    "progress": {
+      "install_app": "Instalowanie i uruchamianie Pipecat Assist. Może to potrwać kilka minut.",
+      "start_app": "Uruchamianie Pipecat Assist."
+    },
+    "abort": {
+      "already_configured": "Pipecat Assist jest już skonfigurowany."
+    }
+  }
+}

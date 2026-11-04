@@ -2,15 +2,43 @@
   "config": {
     "step": {
       "user": {
+        "title": "Install Pipecat Assist",
+        "description": "The Pipecat Assist app is not installed. Home Assistant can add [{repository}]({repository}) to its app store, then install and start Pipecat Assist.",
+        "menu_options": {
+          "install_app": "Install and start Pipecat Assist",
+          "manual": "Connect to an existing server"
+        }
+      },
+      "app_stopped": {
+        "title": "Start Pipecat Assist",
+        "description": "The Pipecat Assist app is installed but is not running.",
+        "menu_options": {
+          "start_app": "Start Pipecat Assist",
+          "manual": "Connect to an existing server"
+        }
+      },
+      "app_setup_failed": {
+        "title": "Pipecat Assist setup failed",
+        "description": "Home Assistant could not prepare or reach the Pipecat Assist app. Check the Home Assistant and app logs, then retry or connect to an existing server.",
+        "menu_options": {
+          "setup_app": "Retry app setup",
+          "manual": "Connect to an existing server"
+        }
+      },
+      "manual": {
         "title": "Pipecat Assist",
-        "description": "Connect Home Assistant Assist, STT, TTS, and Lovelace to the Pipecat Assist add-on. The URL is detected automatically when Supervisor access is available.",
+        "description": "Connect Home Assistant to a running Pipecat Assist server.",
         "data": {
-          "url": "Add-on URL"
+          "url": "Pipecat Assist URL"
         }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect to Pipecat Assist."
+    },
+    "progress": {
+      "install_app": "Installing and starting Pipecat Assist. This can take a few minutes.",
+      "start_app": "Starting Pipecat Assist."
     },
     "abort": {
       "already_configured": "Pipecat Assist is already configured."
