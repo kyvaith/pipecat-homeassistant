@@ -78,6 +78,12 @@ responsive realtime experience.
 
 ## Installation
 
+The Supervisor app runs Pipecat. The separate Home Assistant integration
+adds the dashboard card, Assist, and AI Task entities. Install both for the
+full experience; HACS and Marketplace install only the integration.
+
+[![Open Pipecat Assist in Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=kyvaith&repository=pipecat-homeassistant&category=integration)
+
 1. Add this repository URL to Home Assistant **Settings > Add-ons > Add-on
    Store > Repositories**:
 
@@ -85,16 +91,17 @@ responsive realtime experience.
    https://github.com/kyvaith/pipecat-homeassistant
    ```
 
-2. Add the same repository URL to **HACS > Custom repositories** as an
-   **Integration**.
-
-3. Install the **Pipecat Assist** add-on/app from the Home Assistant add-on
+2. Install the **Pipecat Assist** add-on/app from the Home Assistant add-on
    store.
 
-4. Install the **Pipecat Assist** custom component from HACS, then restart Home
-   Assistant when HACS asks you to.
+3. Open the integration using the badge above, or search for **Pipecat Assist**
+   in **Settings > Marketplace** (Home Assistant 2026.11 or newer) or **HACS**.
+   If it is not in the catalog yet, add the same repository URL as a custom
+   repository of type **Integration**.
 
-5. Add the Pipecat Assist integration in **Settings > Devices & services**. The
+4. Install the integration and restart Home Assistant when prompted.
+
+5. Add Pipecat Assist in **Settings > Devices & services**. The
    integration should auto-detect the add-on URL; keep the detected value unless
    you run the add-on in a custom network layout.
 
