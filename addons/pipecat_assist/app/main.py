@@ -190,6 +190,7 @@ ESPHOME_PROVISIONER = ESPHomeProvisioner(
 class HALiveTurn:
     flow_id: str
     provider: str
+    provider_key: str = ""
     started_at: float = field(default_factory=time.time)
     transcript: str = ""
     speech: str = ""
@@ -1175,8 +1176,11 @@ async def api_conversation(payload: dict[str, Any]):
         raise HTTPException(status_code=400, detail="text is required")
     config = STORE.load()
     flow = config.selected_flow(payload.get("flow_id"))
-    live_turn = _find_ha_live_turn_by_transcript(flow.id, text)
+    gpt_live = _gpt_live_selected(config, flow)
+    live_turn = _match_ha_live_turn(config, flow, _find_ha_live_turn_by_transcript(flow.id, text))
     if live_turn:
+        if gpt_live:
+            HA_LIVE_TURNS_BY_TRANSCRIPT.pop(_ha_live_turn_key(flow.id, text), None)
         try:
             live_result = await _ha_live_conversation_result(
                 live_turn,
@@ -1204,6 +1208,11 @@ async def api_conversation(payload: dict[str, Any]):
             )
             return live_result
         raise HTTPException(status_code=502, detail="Pipecat Live Bridge conversation returned no speech")
+    if gpt_live:
+        raise HTTPException(
+            status_code=409,
+            detail="GPT-Live needs a completed Pipecat Live Bridge microphone turn. Text-only requests do not use another model.",
+        )
 
     async def request():
         result = await run_text_conversation(
@@ -1681,6 +1690,8 @@ async def api_stt(request: Request, flow_id: str | None = None):
 
     config = STORE.load()
     flow = config.selected_flow(flow_id)
+    if _gpt_live_selected(config, flow):
+        raise HTTPException(status_code=400, detail="GPT-Live requires the Pipecat Live Bridge streaming STT endpoint.")
     metadata = _parse_speech_content(request.headers.get("x-speech-content", ""))
     content_type = request.headers.get("content-type") or "audio/wav"
     return await _transcribe_audio_bytes(
@@ -1699,9 +1710,8 @@ async def _handle_ha_live_stt_stream(
     flow: FlowConfig,
     integration: IntegrationConfig,
     metadata: dict[str, Any],
-    content_type: str,
 ) -> None:
-    turn, live_queue = _start_gemini_live_ha_turn(
+    turn, live_queue = _start_ha_live_turn(
         config=config,
         flow=flow,
         integration=integration,
@@ -1711,14 +1721,21 @@ async def _handle_ha_live_stt_stream(
             or DEFAULT_HA_STT_SAMPLE_RATE
         ),
     )
-    await websocket.send_json({"type": "ready", "mode": "live", "provider": "gemini"})
+    finished = False
+    first_audio = True
     try:
+        await websocket.send_json({"type": "ready", "mode": "live", "provider": integration.kind})
         while True:
             message = await websocket.receive()
             message_type = message.get("type")
             if message_type == "websocket.disconnect":
                 raise WebSocketDisconnect()
             if data := message.get("bytes"):
+                if integration.kind == "openai_live" and first_audio:
+                    data = _pcm_stream_payload(data)
+                    first_audio = False
+                    if not data:
+                        continue
                 await _queue_stream_audio(live_queue, turn.task, data)
                 if turn.error:
                     raise HTTPException(status_code=502, detail=f"Pipecat Live Bridge failed: {turn.error}")
@@ -1732,22 +1749,20 @@ async def _handle_ha_live_stt_stream(
                 continue
             if event.get("type") == "end":
                 break
-    finally:
-        if turn.task and not turn.task.done():
-            with suppress(Exception):
-                await _queue_stream_audio(live_queue, turn.task, None)
-
-    transcript = await _wait_for_ha_live_transcript(turn)
-    if turn.error:
-        raise HTTPException(status_code=502, detail=f"Pipecat Live Bridge failed: {turn.error}")
-    if not transcript:
-        logger.info("Pipecat Live Bridge returned no transcript for flow {}; treating as no speech", flow.id)
-        await websocket.send_json({"type": "final", "text": ""})
+        await _queue_stream_audio(live_queue, turn.task, None)
+        transcript = await _wait_for_ha_live_transcript(turn)
+        if turn.error:
+            raise HTTPException(status_code=502, detail=f"Pipecat Live Bridge failed: {turn.error}")
+        if not transcript:
+            logger.info("Pipecat Live Bridge returned no transcript for flow {}; treating as no speech", flow.id)
+        await websocket.send_json({"type": "final", "text": transcript})
+        finished = turn.transcript_ready.is_set()
         await websocket.close()
-        return
-
-    await websocket.send_json({"type": "final", "text": transcript.strip()})
-    await websocket.close()
+    finally:
+        if not finished and not turn.task.done():
+            turn.task.cancel()
+            with suppress(asyncio.CancelledError):
+                await turn.task
 
 
 async def _queue_stream_audio(queue, provider_task, chunk) -> None:
@@ -1802,7 +1817,6 @@ async def api_stt_stream(websocket: WebSocket):
                 flow=flow,
                 integration=live_integration,
                 metadata=metadata,
-                content_type=content_type,
             )
             return
 
@@ -2610,7 +2624,7 @@ async def api_tts(payload: dict[str, Any]):
         raise HTTPException(status_code=400, detail="No text was provided")
 
     response_format = _preferred_tts_format(payload)
-    live_turn = _find_ha_live_turn_by_speech(flow.id, text)
+    live_turn = _match_ha_live_turn(config, flow, _find_ha_live_turn_by_speech(flow.id, text))
     if live_turn:
         try:
             live_audio = await _ha_live_tts_audio(live_turn)
@@ -2632,6 +2646,11 @@ async def api_tts(payload: dict[str, Any]):
             )
             return Response(content=audio, media_type=media_type, headers={"X-Audio-Extension": extension})
         raise HTTPException(status_code=502, detail="Pipecat Live Bridge TTS returned no audio")
+    if _gpt_live_selected(config, flow):
+        raise HTTPException(
+            status_code=409,
+            detail="No GPT-Live audio is available for this text. Pipecat Live Bridge does not use a different TTS model.",
+        )
 
     _prune_tts_prefetch()
     cached = _pop_tts_prefetch(flow.id, text, response_format)
@@ -3019,20 +3038,60 @@ async def _send_ws_json(websocket: WebSocket, payload: dict[str, Any]) -> None:
         await websocket.send_json(payload)
 
 
+def _gpt_live_selected(config: RuntimeConfig, flow: FlowConfig) -> bool:
+    integration = config.model_integration(flow)
+    step = flow.model_step()
+    selected = (step.integration_id if step else "") or flow.provider_id
+    return (integration.kind if integration else selected) in {"openai_live", "openai-live"}
+
+
+def _gpt_live_provider_key(config: RuntimeConfig, integration: IntegrationConfig) -> str:
+    backend = config.integration(integration.delegation_integration_id)
+    definition = integration.model_dump_json() + (backend.model_dump_json() if backend else "")
+    return hashlib.sha256(definition.encode()).hexdigest()
+
+
+def _match_ha_live_turn(
+    config: RuntimeConfig, flow: FlowConfig, turn: HALiveTurn | None
+) -> HALiveTurn | None:
+    if turn is None:
+        return None
+    gpt_live = _gpt_live_selected(config, flow)
+    if not gpt_live and turn.provider != "openai_live":
+        return turn
+    integration = config.model_integration(flow)
+    if (
+        gpt_live and integration and integration.enabled and turn.provider == "openai_live"
+        and turn.provider_key == _gpt_live_provider_key(config, integration)
+    ):
+        return turn
+    raise HTTPException(status_code=409, detail="The cached voice turn does not match the active GPT-Live configuration.")
+
+
 def _ha_live_bridge_integration(
     config: RuntimeConfig,
     flow: FlowConfig,
     metadata: dict[str, Any],
 ) -> IntegrationConfig | None:
-    """Return Gemini Live when the active pipeline can be wrapped for HA Assist."""
+    """Select the native Live provider; a GPT-Live request must fail closed."""
 
     integration = config.model_integration(flow)
     provider_kind = integration.kind if integration else flow.provider_id
-    if _runtime_mode(flow, provider_kind) != "s2s" or provider_kind != "gemini":
-        return None
-    if not _configured_integration(integration):
-        return None
-    if not ((integration.api_key if integration else "") or os.getenv("GOOGLE_API_KEY", "")):
+    gpt_live = _gpt_live_selected(config, flow)
+    if gpt_live:
+        try:
+            if _runtime_mode(flow, provider_kind) != "s2s":
+                raise RuntimeError("GPT-Live requires a speech-to-speech pipeline")
+            integration = _require_integration(integration, "GPT-Live")
+            _openai_live_url(integration)
+            _openai_live_backend(config, integration)
+        except (RuntimeError, ValueError) as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
+    elif (
+        _runtime_mode(flow, provider_kind) != "s2s" or provider_kind != "gemini"
+        or not _configured_integration(integration)
+        or not (integration.api_key or os.getenv("GOOGLE_API_KEY", ""))
+    ):
         return None
 
     codec = str(_ws_metadata_value(metadata, "codec", "pcm") or "pcm").lower()
@@ -3045,6 +3104,8 @@ def _ha_live_bridge_integration(
         or DEFAULT_HA_STT_SAMPLE_WIDTH * 8
     )
     channels = int(_ws_metadata_value(metadata, "channel", DEFAULT_HA_STT_CHANNELS) or DEFAULT_HA_STT_CHANNELS)
+    if gpt_live and (bit_rate != 16 or channels != 1 or codec != "pcm" or not 8000 <= sample_rate <= 48000):
+        raise HTTPException(status_code=400, detail="GPT-Live requires mono 16-bit PCM at 8-48 kHz.")
     if bit_rate != 16 or channels != 1 or "pcm" not in codec:
         logger.info(
             "Skipping Pipecat Live Bridge for flow {} because HA audio is {} Hz, {} bit, {} channel, codec={}",
@@ -3185,7 +3246,7 @@ async def _warm_ha_assist_flow(config: RuntimeConfig, flow: FlowConfig, reason: 
                 "channel": DEFAULT_HA_STT_CHANNELS,
             },
         )
-        if integration:
+        if integration and integration.kind == "gemini":
             await _warm_gemini_live_ha_setup(config, flow, integration, tools_schema)
         logger.info(
             "HA Assist warmup finished flow={} reason={} duration_ms={:.0f}",
@@ -3522,7 +3583,74 @@ async def _run_gemini_live_ha_turn(
                 await bridge.close()
 
 
-def _start_gemini_live_ha_turn(
+async def _run_openai_live_ha_turn(
+    *,
+    turn: HALiveTurn,
+    queue: asyncio.Queue[bytes | None],
+    websocket: WebSocket | None,
+    config: RuntimeConfig,
+    flow: FlowConfig,
+    integration: IntegrationConfig,
+    input_sample_rate: int,
+) -> None:
+    from app.openai_live_ha import HAOpenAILiveLLMService, collect_openai_live_turn
+
+    bridge = None
+    try:
+        local_tools = [schema for schema in [_web_search_tool_schema(config, flow)] if schema]
+        mcp_tools = None
+        mcp_servers = config.enabled_mcp_servers(config.effective_mcp_token) if flow.mcp_enabled else []
+        if mcp_servers:
+            bridge = CombinedMCPBridge(mcp_servers, flow.mcp_tool_allowlist)
+            await bridge.start()
+            mcp_tools = await bridge.tools_schema(
+                cache_enabled=config.mcp_tools_cache_enabled,
+                cache_ttl_seconds=config.mcp_tools_cache_ttl_seconds,
+            )
+        tools = _merge_tools_schema(mcp_tools, local_tools)
+        flow = _flow_with_mcp_context(flow, bridge)
+        llm, target = _openai_live_service(config, flow, integration, tools, service_class=HAOpenAILiveLLMService)
+        _register_local_tool_handlers(target, local_tools)
+        if bridge and mcp_tools:
+            await bridge.register_tools_schema(mcp_tools, target)
+
+        async def on_transcript(text: str) -> None:
+            if websocket:
+                await _send_ws_json(websocket, {"type": "partial", "text": text})
+
+        context = LLMContext(tools=tools) if tools else LLMContext()
+        result = await collect_openai_live_turn(
+            llm, context, queue,
+            sample_rate=input_sample_rate,
+            on_transcript=on_transcript,
+            timeout=HA_LIVE_RESULT_TIMEOUT_SECONDS,
+        )
+        turn.transcript = result.transcript
+        turn.speech = result.speech
+        turn.audio_chunks = result.audio_chunks
+        turn.audio_sample_rate = result.sample_rate
+        if turn.transcript:
+            _remember_ha_live_transcript(turn)
+            _remember_ha_live_speech(turn)
+        logger.info(
+            "GPT-Live HA Assist turn finished flow={} transcript={} speech={} audio_bytes={}",
+            flow.id, _text_fingerprint(turn.transcript), _text_fingerprint(turn.speech), len(turn.audio),
+        )
+    except TimeoutError:
+        turn.error = "GPT-Live timed out before completing the microphone turn"
+        logger.warning("GPT-Live HA Assist timed out for flow {}", flow.id)
+    except Exception as err:
+        turn.error = str(err) or type(err).__name__
+        logger.warning("GPT-Live HA Assist failed for flow {}: {}", flow.id, turn.error)
+    finally:
+        turn.transcript_ready.set()
+        turn.done.set()
+        if bridge:
+            with suppress(Exception):
+                await bridge.close()
+
+
+def _start_ha_live_turn(
     *,
     config: RuntimeConfig,
     flow: FlowConfig,
@@ -3530,10 +3658,16 @@ def _start_gemini_live_ha_turn(
     websocket: WebSocket | None,
     input_sample_rate: int,
 ) -> tuple[HALiveTurn, "asyncio.Queue[bytes | None]"]:
-    turn = HALiveTurn(flow_id=flow.id, provider="gemini-live")
+    gpt_live = integration.kind == "openai_live"
+    turn = HALiveTurn(
+        flow_id=flow.id,
+        provider="openai_live" if gpt_live else "gemini-live",
+        provider_key=_gpt_live_provider_key(config, integration) if gpt_live else "",
+    )
     queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=32)
+    run_turn = _run_openai_live_ha_turn if gpt_live else _run_gemini_live_ha_turn
     turn.task = asyncio.create_task(
-        _run_gemini_live_ha_turn(
+        run_turn(
             turn=turn,
             queue=queue,
             websocket=websocket,
@@ -3547,9 +3681,12 @@ def _start_gemini_live_ha_turn(
 
 
 async def _wait_for_ha_live_transcript(turn: HALiveTurn) -> str:
-    with suppress(TimeoutError):
+    try:
         async with asyncio.timeout(HA_LIVE_TRANSCRIPT_TIMEOUT_SECONDS):
             await turn.transcript_ready.wait()
+    except TimeoutError as err:
+        if turn.provider == "openai_live":
+            raise HTTPException(status_code=504, detail="GPT-Live did not complete the microphone turn in time.") from err
     return turn.transcript.strip()
 
 
@@ -3571,6 +3708,7 @@ async def _ha_live_conversation_result(
         "end_conversation": end_conversation,
         "error": "",
         "source": "pipecat_live_bridge",
+        "provider": turn.provider,
     }
 
 
@@ -4997,7 +5135,10 @@ def _openai_live_backend(config: RuntimeConfig, integration: IntegrationConfig) 
     return _require_integration(backend, "GPT-Live delegation", fields=())
 
 
-def _openai_live_service(config: RuntimeConfig, flow: FlowConfig, integration: IntegrationConfig, tools_schema):
+def _openai_live_service(
+    config: RuntimeConfig, flow: FlowConfig, integration: IntegrationConfig, tools_schema,
+    *, service_class=None,
+):
     from pipecat.services.openai.live.llm import OpenAILiveLLMService
     from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
     from pipecat.workers.llm.backend_llm_worker import BackendLLMWorker
@@ -5018,7 +5159,7 @@ def _openai_live_service(config: RuntimeConfig, flow: FlowConfig, integration: I
                 system_instruction=instructions,
             )
         )
-    llm = OpenAILiveLLMService(
+    llm = (service_class or OpenAILiveLLMService)(
         api_key=_integration_api_key(integration, "GPT-Live"),
         base_url=_openai_live_url(integration),
         settings=OpenAILiveLLMService.Settings(

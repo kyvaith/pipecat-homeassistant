@@ -13,6 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseMetadataTests(unittest.TestCase):
+    def test_integration_ships_current_english_translations(self):
+        component = ROOT / "custom_components/pipecat_assist"
+        strings = json.loads((component / "strings.json").read_text(encoding="utf-8"))
+        fallback = json.loads(
+            (component / "translations/en.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(fallback, strings)
+
     def test_installable_packages_have_one_version(self):
         addon = ROOT / "addons" / "pipecat_assist"
         version = tomllib.loads((addon / "pyproject.toml").read_text(encoding="utf-8"))[

@@ -260,7 +260,7 @@ resource and then add a manual card:
 ```yaml
 lovelace:
   resources:
-    - url: /pipecat_assist/pipecat-assist-card.js?v=0.2.5
+    - url: /pipecat_assist/pipecat-assist-card.js?v=0.2.6
       type: module
 ```
 
@@ -355,3 +355,10 @@ to install it from HACS or Marketplace, then add **Pipecat Assist** in
 app through Supervisor after confirmation. It detects an already-running app
 automatically and allows a custom server URL.
 The integration provides Conversation, STT, TTS, AI Tasks, and the Lovelace card.
+
+Classic Assist can use the **OpenAI GPT-Live** pipeline through the Pipecat
+Live Bridge. Set Pipecat Assist as the conversation agent, speech-to-text,
+and text-to-speech engine, turn off **Prefer handling commands locally**,
+and start a microphone turn. If GPT-Live cannot complete the turn, Assist
+reports the error instead of switching to another model. Use the Lovelace
+card or the app's voice panel for full-duplex audio and barge-in.
