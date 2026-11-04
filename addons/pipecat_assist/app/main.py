@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode, urljoin, urlsplit
+from urllib.parse import quote, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 from fastapi import HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -75,6 +75,7 @@ from app.config import (
     DEFAULT_GOOGLE_IMAGEN_MODEL,
     DEFAULT_FAL_IMAGE_MODEL,
     DEFAULT_OPENAI_TEXT_MODEL,
+    DEFAULT_OPENAI_LIVE_MODEL,
     DEFAULT_OPENAI_REALTIME_MODEL,
     DEFAULT_OPENAI_REALTIME_VOICE,
     DEFAULT_OPENAI_STT_MODEL,
@@ -88,6 +89,7 @@ from app.config import (
     IntegrationConfig,
     OPENAI_REALTIME_VOICES,
     RuntimeConfig,
+    S2S_PROVIDER_KINDS,
 )
 from app.audio_debug import (
     audio_debug_file_path,
@@ -936,6 +938,9 @@ def _static_models_for(integration: IntegrationConfig, capability: str) -> list[
             values = [integration.default_realtime_model or DEFAULT_OPENAI_REALTIME_MODEL]
         else:
             values = []
+    elif integration.kind == "openai_live":
+        if capability == "realtime":
+            values = [integration.default_realtime_model or DEFAULT_OPENAI_LIVE_MODEL]
     elif integration.kind == "openai_cloud":
         if capability == "stt":
             values = [integration.default_stt_model or DEFAULT_OPENAI_STT_MODEL, DEFAULT_OPENAI_STT_MODEL]
@@ -4404,8 +4409,15 @@ def _runtime_flow_errors(config: RuntimeConfig, flow: FlowConfig) -> list[str]:
     runtime_mode = _runtime_mode(flow, provider_kind)
 
     if runtime_mode == "s2s":
-        if provider_kind not in {"openai", "gemini", "aws_nova_sonic"}:
+        if provider_kind not in S2S_PROVIDER_KINDS:
             errors.append(f"Realtime speech-to-speech runtime for {provider_kind} is not supported.")
+        if provider_kind == "openai_live":
+            try:
+                integration = _require_integration(model_integration, "GPT-Live")
+                _openai_live_url(integration)
+                _openai_live_backend(config, integration)
+            except (RuntimeError, ValueError) as err:
+                errors.append(str(err))
         if any(step.kind in {"stt", "tts"} and step.enabled for step in flow.steps):
             errors.append("Speech-to-speech pipelines cannot use separate STT or TTS steps.")
         return errors
@@ -4504,19 +4516,23 @@ def _model_name(
     provider_kind: str | None = None,
 ) -> str:
     model_step = flow.model_step()
+    kind = integration.kind if integration else provider_kind
+    if kind == "gemini":
+        for candidate in (
+            integration.default_realtime_model if integration else "",
+            model_step.model if model_step else "",
+            flow.model,
+        ):
+            if _realtime_model_matches_provider("gemini", candidate):
+                return candidate.strip()
+        return DEFAULT_GEMINI_LIVE_MODEL
     model = (
         (model_step.model if model_step else "")
         or flow.model
         or (integration.default_realtime_model if integration else "")
     ).strip()
-    kind = integration.kind if integration else provider_kind
     if kind == "openai" and _openai_base_url(integration):
         return model
-    if kind == "gemini" and not _realtime_model_matches_provider(
-        "gemini",
-        model,
-    ):
-        return (integration.default_realtime_model if integration else "") or DEFAULT_GEMINI_LIVE_MODEL
     if kind == "openai" and not _realtime_model_matches_provider(
         "openai",
         model,
@@ -4548,9 +4564,9 @@ def _gemini_model(model: str) -> str:
 def _gemini_voice(flow: FlowConfig, integration: IntegrationConfig | None) -> str:
     output_step = _output_step(flow)
     for candidate in (
+        integration.default_voice if integration else "",
         output_step.voice if output_step else "",
         flow.voice,
-        integration.default_voice if integration else "",
     ):
         if _realtime_voice_matches_provider("gemini", candidate):
             return candidate
@@ -4644,6 +4660,15 @@ def _gemini_live_service(
 
     class ResilientGeminiLiveLLMService(GeminiLiveLLMService):
         """Do not count a normal long-lived session renewal as a rapid failure."""
+
+        async def _disconnect(self):
+            # Pipecat clears this ledger on disconnect, but retains the context
+            # across reconnects. Keep sent tool IDs for this service instance.
+            completed = self._completed_tool_calls
+            try:
+                await super()._disconnect()
+            finally:
+                self._completed_tool_calls.update(completed)
 
         async def _handle_user_started_speaking(self, frame):
             logger.debug(
@@ -4834,10 +4859,20 @@ def _build_stt_service(
     raise RuntimeError(f"STT provider {integration.kind} is not supported by composed runtime")
 
 
-def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=None):
-    step, integration = _step_integration(config, flow, "llm")
+def _build_llm_service(
+    config: RuntimeConfig,
+    flow: FlowConfig,
+    tools_schema=None,
+    *,
+    backend_integration: IntegrationConfig | None = None,
+):
+    step, integration = (
+        (None, backend_integration)
+        if backend_integration is not None
+        else _step_integration(config, flow, "llm")
+    )
     integration = _require_integration(integration, "LLM", fields=())
-    model = _step_model_for(step, integration, "llm", flow.text_model)
+    model = _step_model_for(step, integration, "llm", "" if backend_integration else flow.text_model)
 
     if integration.kind in {"openai", "openai_cloud"}:
         from pipecat.services.openai.llm import OpenAILLMService
@@ -4938,6 +4973,65 @@ def _build_llm_service(config: RuntimeConfig, flow: FlowConfig, tools_schema=Non
         )
 
     raise RuntimeError(f"LLM provider {integration.kind} is not supported by composed runtime")
+
+
+def _openai_live_url(integration: IntegrationConfig) -> str:
+    if not integration.base_url.strip():
+        return "wss://api.openai.com/v1/live/sessions"
+    url = urlsplit(integration.base_url.strip())
+    scheme = {"http": "ws", "https": "wss"}.get(url.scheme, url.scheme)
+    if (
+        scheme not in {"ws", "wss"} or not url.hostname or url.username or url.password
+        or url.query or url.fragment
+    ):
+        raise ValueError("GPT-Live needs a WebSocket endpoint without credentials, a query, or a fragment.")
+    return urlunsplit((scheme, url.netloc, url.path.rstrip("/"), "", ""))
+
+
+def _openai_live_backend(config: RuntimeConfig, integration: IntegrationConfig) -> IntegrationConfig | None:
+    if not integration.delegation_integration_id:
+        return None
+    backend = config.integration(integration.delegation_integration_id)
+    if not backend or backend.kind not in COMPOSED_STEP_PROVIDER_KINDS["llm"]:
+        raise RuntimeError("GPT-Live client delegation needs a text LLM integration.")
+    return _require_integration(backend, "GPT-Live delegation", fields=())
+
+
+def _openai_live_service(config: RuntimeConfig, flow: FlowConfig, integration: IntegrationConfig, tools_schema):
+    from pipecat.services.openai.live.llm import OpenAILiveLLMService
+    from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
+    from pipecat.workers.llm.backend_llm_worker import BackendLLMWorker
+
+    backend = _openai_live_backend(config, integration)
+    tool_target = None
+    instructions = _effective_instructions(flow)
+    if backend is not None:
+        tool_target = _build_llm_service(config, flow, backend_integration=backend)
+        context = LLMContext(tools=tools_schema) if tools_schema else LLMContext()
+        delegation = OpenAILiveLLMService.ClientDelegation(
+            backend=BackendLLMWorker(llm=tool_target, context=context)
+        )
+    else:
+        delegation = OpenAILiveLLMService.ResponsesDelegation(
+            settings=OpenAIResponsesLLMService.Settings(
+                model=integration.default_model or DEFAULT_OPENAI_TEXT_MODEL,
+                system_instruction=instructions,
+            )
+        )
+    llm = OpenAILiveLLMService(
+        api_key=_integration_api_key(integration, "GPT-Live"),
+        base_url=_openai_live_url(integration),
+        settings=OpenAILiveLLMService.Settings(
+            model=integration.default_realtime_model or DEFAULT_OPENAI_LIVE_MODEL,
+            voice=integration.default_voice or DEFAULT_OPENAI_REALTIME_VOICE,
+            system_instruction=(
+                instructions + "\nDelegate requests requiring Home Assistant tools, web search, "
+                "or deeper reasoning to your backend. Never claim an action succeeded without its result."
+            ),
+        ),
+        delegation=delegation,
+    )
+    return llm, tool_target if tool_target is not None else llm
 
 
 def _build_tts_service(config: RuntimeConfig, flow: FlowConfig):
@@ -5236,7 +5330,7 @@ async def _run_bot_session(
     audio_debug = None
 
     if runtime_mode == "s2s":
-        if provider_kind not in {"openai", "gemini", "aws_nova_sonic"}:
+        if provider_kind not in S2S_PROVIDER_KINDS:
             raise RuntimeError(
                 f"Realtime speech-to-speech runtime for {provider_kind} is not supported"
             )
@@ -5254,7 +5348,12 @@ async def _run_bot_session(
         if provider_kind in {"gemini", "openai"} and not api_key:
             raise RuntimeError(f"The selected {provider_kind} realtime provider is missing an API key")
 
-        if provider_kind == "aws_nova_sonic":
+        tool_target = None
+        if provider_kind == "openai_live":
+            integration = _require_integration(integration, "GPT-Live")
+            realtime_model = integration.default_realtime_model or DEFAULT_OPENAI_LIVE_MODEL
+            llm, tool_target = _openai_live_service(config, flow, integration, tools_schema)
+        elif provider_kind == "aws_nova_sonic":
             integration = _require_integration(
                 integration,
                 "AWS Nova Sonic",
@@ -5293,7 +5392,8 @@ async def _run_bot_session(
                 integration=integration,
                 tools_schema=tools_schema,
             )
-        _register_local_tool_handlers(llm, local_tool_schemas)
+        tool_target = tool_target if tool_target is not None else llm
+        _register_local_tool_handlers(tool_target, local_tool_schemas)
 
         logger.info(
             "Starting {} speech-to-speech model {} for flow {}",
@@ -5303,7 +5403,7 @@ async def _run_bot_session(
         )
 
         if bridge and mcp_tools_schema:
-            await bridge.register_tools_schema(mcp_tools_schema, llm)
+            await bridge.register_tools_schema(mcp_tools_schema, tool_target)
 
         greeting_messages = (
             [{"role": "developer", "content": flow.greeting}]
@@ -5324,7 +5424,13 @@ async def _run_bot_session(
         )
         context_for_memory = context
         user_params = None
-        if provider_kind == "gemini" and _enabled_step(flow, "vad"):
+        if provider_kind == "openai_live":
+            from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
+
+            user_params = LLMUserAggregatorParams(
+                user_turn_strategies=ExternalUserTurnStrategies(enable_interruptions=False)
+            )
+        elif provider_kind == "gemini" and _enabled_step(flow, "vad"):
             from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
             from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
@@ -5337,7 +5443,7 @@ async def _run_bot_session(
         user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
             context,
             user_params=user_params,
-            realtime_service_mode=True,
+            realtime_service_mode=provider_kind != "openai_live",
         )
 
         if config.audio_debug_enabled:
@@ -5371,7 +5477,7 @@ async def _run_bot_session(
             logger.info("Client connected to flow {}", flow.id)
             if _flow_enabled(flow):
                 logger.warning("Pipecat Flows are ignored for speech-to-speech runtime {}", provider_kind)
-            if is_esphome_satellite or is_browser_pcm or flow.greeting.strip():
+            if provider_kind == "openai_live" or is_esphome_satellite or is_browser_pcm or flow.greeting.strip():
                 await worker.queue_frames([LLMRunFrame()])
 
         @transport.event_handler("on_client_disconnected")

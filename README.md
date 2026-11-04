@@ -37,7 +37,7 @@ device control through MCP.
 - **Custom pipeline builder** for speech-to-speech and composed realtime flows:
   mix STT, LLM, TTS, memory, web search, Home Assistant tools, and Pipecat
   Flows in one runtime profile.
-- **Cloud provider integrations** for Gemini, OpenAI, Soniox, Deepgram,
+- **Cloud provider integrations** for Gemini, OpenAI (including GPT-Live), Soniox, Deepgram,
   Speechmatics, Cartesia, Gradium, ElevenLabs, Google Cloud TTS, AWS Bedrock,
   AWS Nova Sonic, and OpenAI-compatible endpoints.
 - **Local AI options** through Ollama, local runtime endpoints, and custom
@@ -75,6 +75,21 @@ OpenAI Realtime. Because HA Assist itself is still not a full-duplex WebRTC
 client, this bridge cannot provide true barge-in while the assistant is
 speaking. The Lovelace card and add-on assistant card remain the more
 responsive realtime experience.
+
+### OpenAI GPT-Live
+
+Add the **OpenAI GPT-Live** pipeline preset and configure its separate
+integration with an OpenAI project API key. `gpt-live-1` handles audio and
+turn-taking; the **Backend integration** setting delegates tool use and complex
+requests to OpenAI Responses or to an enabled text-model integration such as
+Anthropic, Ollama, or an OpenAI-compatible server. MCP and web-search tools go
+to the selected backend. Leave the Live WebSocket endpoint blank for OpenAI;
+for a compatible gateway, enter its complete Live WebSocket URL.
+
+Use GPT-Live with the add-on voice panel, Lovelace card, or realtime voice
+satellites. The classic Home Assistant Assist STT/Conversation/TTS bridge does
+not wrap GPT-Live sessions. For the classic bridge, choose Gemini Live or a
+composed pipeline with explicit STT, LLM and TTS steps.
 
 ## Installation
 

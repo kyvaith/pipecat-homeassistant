@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.5
+
+- Add OpenAI GPT-Live speech-to-speech with Responses or client delegation,
+  Home Assistant tools, and an optional Live WebSocket endpoint.
+- Let the selected Gemini Live integration control its model and voice on
+  both realtime and HA Assist paths, even in pipelines with old saved defaults.
+- Preserve delivered tool results across Gemini Live reconnects so persistent
+  satellites do not replay old results after a renewal.
+- Fix pipeline editing over HTTP without changing browser security settings.
+
 ## 0.2.4
 
 - Install and start the Pipecat Assist app from the Home Assistant integration

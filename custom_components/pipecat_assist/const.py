@@ -1,7 +1,7 @@
 """Constants for Pipecat Assist."""
 
 DOMAIN = "pipecat_assist"
-VERSION = "0.2.4"
+VERSION = "0.2.5"
 CONF_URL = "url"
 CONF_TOKEN = "token"
 CONF_FLOW_ID = "flow_id"

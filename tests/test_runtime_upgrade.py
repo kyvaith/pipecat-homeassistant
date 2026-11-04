@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sys
 import tempfile
@@ -33,7 +34,10 @@ from app.main import (
     _flow_node_configs,
     _flow_with_mcp_context,
     _gemini_generate_content,
+    _gemini_live_ha_setup,
     _gemini_live_service,
+    _model_name,
+    _openai_live_service,
     _openai_realtime_service,
     _queue_stream_audio,
     _rtvi_observer_params,
@@ -55,12 +59,21 @@ from mcp.client.session_group import StreamableHttpParameters
 from pipecat.adapters.llm.schemas.function_schema import FunctionSchema
 from pipecat.adapters.llm.schemas.tools_schema import ToolsSchema
 from pipecat.flows import FlowsFunctionSchema
+from pipecat.frames.frames import InputAudioRawFrame, LLMContextFrame, SpeechOutputAudioRawFrame
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.frame_processor import FrameProcessor
 from pipecat.services.deepgram.flux.stt import DeepgramFluxSTTService
+from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.openai.live.llm import OpenAILiveLLMService
 from pipecat.turns.user_stop import (
     SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
 )
 from pipecat.turns.user_turn_strategies import ExternalUserTurnStrategies
+from pipecat.workers.runner import WorkerRunner
+from websockets.asyncio.server import serve
 
 
 def composed(kind="openai_cloud", role="llm", **fields):
@@ -85,6 +98,151 @@ def composed(kind="openai_cloud", role="llm", **fields):
 
 
 class ServiceConstructionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_gemini_integration_controls_web_and_ha_live_model_and_voice(self):
+        flow = FlowConfig()
+        integration = IntegrationConfig(
+            id="gemini-2", name="Second Gemini integration", kind="gemini",
+            default_realtime_model="gemini-2.5-flash-native-audio-preview-12-2025",
+            default_voice="Kore", language="ko-KR",
+        )
+        flow.model_step().integration_id = integration.id
+        config = RuntimeConfig(integrations=[integration], flows=[flow])
+        model = _model_name(flow, config.model_integration(flow), "gemini")
+        service = _gemini_live_service(api_key="test", model=model, flow=flow, integration=integration)
+        self.assertEqual(service.settings.model, f"models/{integration.default_realtime_model}")
+        self.assertEqual(service.settings.voice, "Kore")
+        setup = _gemini_live_ha_setup(config, flow, integration, None)
+        self.assertEqual(setup["model"], service.settings.model)
+        self.assertEqual(setup["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"], "Kore")
+        await service.cleanup()
+
+    async def test_gemini_reconnect_only_sends_new_tool_results(self):
+        flow = FlowConfig()
+        service = _gemini_live_service(api_key="test", model=flow.model, flow=flow, integration=None)
+        service._completed_tool_calls.add("already-sent")
+        service._context = LLMContext([
+            {"role": "tool", "tool_call_id": "already-sent", "content": '{"ok": true}'},
+            {"role": "tool", "tool_call_id": "new", "content": '{"ok": true}'},
+        ])
+        service._connect = AsyncMock()
+        service._tool_result = AsyncMock()
+        await service._reconnect()
+        await service._process_completed_function_calls(send_new_results=True)
+        service._tool_result.assert_awaited_once_with("new", "tool_call_result", {"ok": True})
+        await service.cleanup()
+
+    async def test_deepgram_nova_passes_model_and_language(self):
+        config, flow, integration = composed("deepgram", "stt", language="de")
+        service = _build_stt_service(config, flow)
+        self.assertIsInstance(service, DeepgramSTTService)
+        self.assertEqual(service.settings.model, "nova-3")
+        self.assertEqual(service.settings.language, "de")
+        self.assertEqual(service._build_connect_kwargs()["model"], "nova-3")
+        self.assertEqual(service._build_connect_kwargs()["language"], "de")
+        await service.cleanup()
+        integration.default_stt_model = "nova-2"
+        service = _build_stt_service(config, flow)
+        self.assertEqual(service.settings.model, "nova-2")
+        await service.cleanup()
+
+    async def test_composed_openai_stt_connects_to_official_transcription_endpoint(self):
+        config, flow, _ = composed(
+            "openai_cloud", "stt", default_stt_model="gpt-4o-mini-transcribe", language="de"
+        )
+        service = _build_stt_service(config, flow)
+        service._websocket_connect = AsyncMock(return_value=AsyncMock())
+        await service._connect_websocket()
+        service._websocket_connect.assert_awaited_once_with(
+            uri="wss://api.openai.com/v1/realtime?intent=transcription",
+            additional_headers={"Authorization": "Bearer test-key"},
+        )
+        self.assertEqual(service.settings.model, "gpt-4o-mini-transcribe")
+        await service._disconnect_websocket()
+        await service.cleanup()
+
+    async def test_gpt_live_responses_session_uses_live_protocol_and_mcp_schema(self):
+        config, flow, integration = composed("openai_live", default_model="gpt-5.4-mini")
+        flow.mode = "realtime"
+        tools = ToolsSchema(standard_tools=[FunctionSchema(
+            name="GetState", description="Get a device state", properties={}, required=[],
+        )])
+        live, target = _openai_live_service(config, flow, integration, tools)
+        self.assertIsInstance(live, OpenAILiveLLMService)
+        self.assertIs(target, live)
+        self.assertEqual(live.base_url, "wss://api.openai.com/v1/live/sessions")
+        live._context = LLMContext(tools=tools)
+        live.send_client_event = AsyncMock()
+        await live._send_session_config()
+        event = live.send_client_event.await_args.args[0]
+        self.assertEqual(event.type, "session.start")
+        self.assertEqual(event.session.model, "gpt-live-1")
+        self.assertEqual(event.session.delegation.type, "responses")
+        self.assertEqual(event.session.delegation.responses["model"], "gpt-5.4-mini")
+        self.assertEqual(event.session.delegation.responses["tools"][0]["name"], "GetState")
+        await live.cleanup()
+
+    async def test_gpt_live_delegates_to_configured_text_worker_without_reusing_voice_key(self):
+        config, flow, integration = composed(
+            "openai_live", base_url="https://voice.example/v1/live/sessions", delegation_integration_id="local",
+        )
+        flow.mode = "realtime"
+        config.integrations.append(IntegrationConfig(
+            id="local", name="Local", kind="openai_compatible", enabled=True,
+            base_url="http://local:8000/v1", default_model="local-model",
+        ))
+        live, target = _openai_live_service(config, flow, integration, None)
+        self.assertEqual(live.base_url, "wss://voice.example/v1/live/sessions")
+        self.assertIs(live._delegation.backend.llm, target)
+        self.assertEqual(target._client.api_key, "not-needed")
+        self.assertEqual(target.settings.model, "local-model")
+        self.assertEqual(_runtime_flow_errors(config, flow), [])
+        await live.cleanup()
+        await target.cleanup()
+
+    async def test_gpt_live_streams_pcm_through_the_pipecat_worker(self):
+        incoming = []
+        outgoing = []
+        pcm = b"\x03\x01" * 480
+        encoded_pcm = base64.b64encode(pcm).decode("ascii")
+
+        async def provider(socket):
+            incoming.append(json.loads(await socket.recv()))
+            await socket.send(json.dumps({"type": "session.started", "session": {"id": "test"}}))
+            incoming.append(json.loads(await socket.recv()))
+            await socket.send(json.dumps({"type": "session.output_audio.delta", "delta": encoded_pcm}))
+            await socket.wait_closed()
+
+        class OutputCapture(FrameProcessor):
+            async def process_frame(self, frame, direction):
+                await super().process_frame(frame, direction)
+                if isinstance(frame, SpeechOutputAudioRawFrame):
+                    outgoing.append((frame.audio, frame.sample_rate))
+                    await worker.cancel()
+                await self.push_frame(frame, direction)
+
+        async with serve(provider, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            config, flow, integration = composed(
+                "openai_live", base_url=f"ws://127.0.0.1:{port}/v1/live/sessions"
+            )
+            live, _ = _openai_live_service(config, flow, integration, None)
+            worker = PipelineWorker(Pipeline([live, OutputCapture()]), enable_rtvi=False)
+
+            @worker.event_handler("on_pipeline_started")
+            async def start(worker, frame):
+                await worker.queue_frame(LLMContextFrame(LLMContext()))
+
+            @live.event_handler("on_session_started")
+            async def send_audio(service, session):
+                await worker.queue_frame(InputAudioRawFrame(pcm, 24000, 1))
+
+            async with asyncio.timeout(10):
+                await WorkerRunner(handle_sigint=False).run(worker)
+
+        self.assertEqual([event["type"] for event in incoming], ["session.start", "session.input_audio.append"])
+        self.assertEqual(incoming[1]["audio"], encoded_pcm)
+        self.assertEqual(outgoing, [(pcm, 24000)])
+
     async def test_other_realtime_providers_construct(self):
         flow = FlowConfig(voice="alloy")
         integration = IntegrationConfig(

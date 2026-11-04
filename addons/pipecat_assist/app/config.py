@@ -37,6 +37,7 @@ GEMINI_TTS_FALLBACK_MODELS = (
 DEFAULT_OPENAI_TEXT_MODEL = "gpt-5.4-mini"
 DEFAULT_OPENAI_REALTIME_MODEL = "gpt-realtime-2"
 DEFAULT_OPENAI_REALTIME_VOICE = "marin"
+DEFAULT_OPENAI_LIVE_MODEL = "gpt-live-1"
 DEFAULT_OPENAI_STT_MODEL = "gpt-4o-mini-transcribe"
 DEFAULT_OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 DEFAULT_OPENAI_TTS_VOICE = "marin"
@@ -108,6 +109,7 @@ COMPOSED_STEP_PROVIDER_KINDS = {
     "llm": COMPOSED_LLM_PROVIDER_KINDS,
     "tts": COMPOSED_TTS_PROVIDER_KINDS,
 }
+S2S_PROVIDER_KINDS = {"gemini", "openai", "openai_live", "aws_nova_sonic"}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -152,6 +154,7 @@ class IntegrationConfig(BaseModel):
     name: str
     kind: Literal[
         "openai",
+        "openai_live",
         "openai_cloud",
         "gemini",
         "gemini_cloud",
@@ -197,6 +200,7 @@ class IntegrationConfig(BaseModel):
     project: str = ""
     location: str = ""
     provider_id: str = ""
+    delegation_integration_id: str = ""
     credentials_json: str = ""
     credentials_path: str = ""
     access_key_id: str = ""
@@ -257,6 +261,14 @@ def default_integrations() -> list[IntegrationConfig]:
             api_key=os.getenv("OPENAI_API_KEY", ""),
             default_realtime_model=os.getenv("REALTIME_MODEL", DEFAULT_OPENAI_REALTIME_MODEL),
             default_voice=os.getenv("REALTIME_VOICE", DEFAULT_OPENAI_REALTIME_VOICE),
+        ),
+        IntegrationConfig(
+            id="openai-live",
+            name="OpenAI GPT-Live",
+            kind="openai_live",
+            default_realtime_model=DEFAULT_OPENAI_LIVE_MODEL,
+            default_model=DEFAULT_OPENAI_TEXT_MODEL,
+            default_voice=DEFAULT_OPENAI_REALTIME_VOICE,
         ),
         IntegrationConfig(
             id="openai-cloud",
@@ -517,6 +529,7 @@ class FlowConfig(BaseModel):
     pipeline_template: Literal[
         "realtime_home",
         "gemini_live_home",
+        "openai_live",
         "aws_nova_sonic",
         "soniox_openai_cartesia",
         "soniox_openai_gradium",
@@ -1067,7 +1080,7 @@ def _strip_unsupported_s2s_flow_steps(config: RuntimeConfig, flow: FlowConfig) -
     has_stt = any(step.kind == "stt" and step.enabled for step in flow.steps)
     has_tts = any(step.kind == "tts" and step.enabled for step in flow.steps)
     is_s2s = flow.mode == "realtime" or (
-        not has_stt and not has_tts and provider_kind in {"gemini", "openai", "aws_nova_sonic"}
+        not has_stt and not has_tts and provider_kind in S2S_PROVIDER_KINDS
     )
     if not is_s2s:
         return False
