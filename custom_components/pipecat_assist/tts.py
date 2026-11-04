@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import uuid4
 
 import aiohttp
 
@@ -24,6 +25,8 @@ from .const import (
     DEFAULT_LANGUAGE,
     SUPPORTED_LANGUAGES,
 )
+
+TURN_CACHE_OPTION = "pipecat_audio_request_id"
 
 
 async def async_setup_entry(
@@ -51,6 +54,11 @@ class PipecatAssistTextToSpeechEntity(TextToSpeechEntity):
         self._attr_unique_id = f"{entry.entry_id}_tts"
         self._session = async_get_clientsession(hass)
 
+    @property
+    def default_options(self) -> dict[str, Any]:
+        """Prevent HA from replaying another turn's audio for identical text."""
+        return {TURN_CACHE_OPTION: uuid4().hex}
+
     async def async_get_tts_audio(
         self,
         message: str,
@@ -65,7 +73,11 @@ class PipecatAssistTextToSpeechEntity(TextToSpeechEntity):
         if token:
             headers["Authorization"] = f"Bearer {token}"
 
-        payload: dict[str, Any] = {"text": message, "language": language, "options": options}
+        payload: dict[str, Any] = {
+            "text": message,
+            "language": language,
+            "options": {key: value for key, value in options.items() if key != TURN_CACHE_OPTION},
+        }
         if flow_id := self._entry.data.get(CONF_FLOW_ID):
             payload["flow_id"] = flow_id
 

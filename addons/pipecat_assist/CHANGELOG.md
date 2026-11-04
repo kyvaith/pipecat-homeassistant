@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.6
+
+- Support OpenAI GPT-Live microphone turns in classic Home Assistant Assist
+  through the Pipecat Live Bridge, without falling back to another model.
+- Keep Assist speech playback tied to the current Pipecat request instead of
+  replaying cached audio from an earlier voice or provider.
+
 ## 0.2.5
 
 - Add OpenAI GPT-Live speech-to-speech with Responses or client delegation,

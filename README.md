@@ -70,8 +70,8 @@ device control through MCP.
   remains available for standalone `pipecat-esp32` firmware.
 
 The Home Assistant Assist path uses an advanced Pipecat Live Bridge so HA
-Assist can talk to speech-to-speech realtime assistants such as Gemini Live and
-OpenAI Realtime. Because HA Assist itself is still not a full-duplex WebRTC
+Assist can talk to native speech-to-speech models such as Gemini Live and
+OpenAI GPT-Live. Because HA Assist itself is still not a full-duplex WebRTC
 client, this bridge cannot provide true barge-in while the assistant is
 speaking. The Lovelace card and add-on assistant card remain the more
 responsive realtime experience.
@@ -86,10 +86,22 @@ Anthropic, Ollama, or an OpenAI-compatible server. MCP and web-search tools go
 to the selected backend. Leave the Live WebSocket endpoint blank for OpenAI;
 for a compatible gateway, enter its complete Live WebSocket URL.
 
-Use GPT-Live with the add-on voice panel, Lovelace card, or realtime voice
-satellites. The classic Home Assistant Assist STT/Conversation/TTS bridge does
-not wrap GPT-Live sessions. For the classic bridge, choose Gemini Live or a
-composed pipeline with explicit STT, LLM and TTS steps.
+Use GPT-Live with the add-on voice panel, Lovelace card, realtime voice
+satellites, or classic Home Assistant Assist. For classic Assist:
+
+1. Make the **OpenAI GPT-Live** pipeline active in the Pipecat Assist app.
+2. In your Home Assistant voice assistant, select **Pipecat Assist** for
+   **Conversation agent**, **Speech-to-text**, and **Text-to-speech**.
+3. Turn off **Prefer handling commands locally** so Home Assistant does not
+   run its local agent on an utterance GPT-Live has already handled. Start
+   the conversation with the microphone.
+
+The Pipecat Live Bridge streams microphone audio to GPT-Live and returns the
+model's original transcript, spoken reply, and audio. Classic Assist plays
+the reply once the turn has finished, without barge-in. Failed voice turns,
+text-only messages, and standalone TTS requests do not fall back to another
+model. A separately configured backend for tools or reasoning is delegation,
+not a fallback.
 
 ## Installation
 

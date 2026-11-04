@@ -10,5 +10,5 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/kyvaith/pipecat-homeassistant/issues",
   "requirements": [],
-  "version": "0.2.5"
+  "version": "0.2.6"
 }
