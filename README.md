@@ -82,22 +82,29 @@ The Supervisor app runs Pipecat. The separate Home Assistant integration
 adds the dashboard card, Assist, and AI Task entities. Install both for the
 full experience; HACS and Marketplace install only the integration.
 
-[![Open Pipecat Assist in Home Assistant](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=kyvaith&repository=pipecat-homeassistant&category=integration)
+1. **Add the app repository to Home Assistant.**
 
-1. Add this repository URL to Home Assistant **Settings > Add-ons > Add-on
-   Store > Repositories**:
+   [![Add the Pipecat Assist app repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fkyvaith%2Fpipecat-homeassistant)
+
+   Confirm the repository in Home Assistant. To add it manually, open the
+   app store (**Settings > Apps**, or **Add-ons** on older versions), select
+   **Repositories** from the top-right menu, and enter:
 
    ```text
    https://github.com/kyvaith/pipecat-homeassistant
    ```
 
-2. Install the **Pipecat Assist** add-on/app from the Home Assistant add-on
-   store.
+2. Install and start **Pipecat Assist** from the **Pipecat Home Assistant**
+   section of the app store.
 
-3. Open the integration using the badge above, or search for **Pipecat Assist**
-   in **Settings > Marketplace** (Home Assistant 2026.11 or newer) or **HACS**.
-   If it is not in the catalog yet, add the same repository URL as a custom
-   repository of type **Integration**.
+3. **Open the companion integration in HACS or Marketplace.**
+
+   [![Open the Pipecat Assist integration](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=kyvaith&repository=pipecat-homeassistant&category=integration)
+
+   You can also search for **Pipecat Assist** in **Settings > Marketplace**
+   (Home Assistant 2026.11 or newer) or **HACS**. If it is not in the catalog
+   yet, add the same repository URL as a custom repository of type
+   **Integration**.
 
 4. Install the integration and restart Home Assistant when prompted.
 

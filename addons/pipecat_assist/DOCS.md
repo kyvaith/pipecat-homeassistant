@@ -348,7 +348,9 @@ export PIPECAT_SMALLWEBRTC_URL="http://<ha-lan-ip>:7860/api/offer?token=<satelli
 
 ## Home Assistant integration
 
-Copy or install `custom_components/pipecat_assist` from this repository, then
-add the integration in Home Assistant. The add-on URL is auto-detected through
-Supervisor when possible and remains editable for custom installations. The
-integration provides Conversation, STT, TTS, and the Lovelace card asset.
+The app runs the Pipecat server; the companion integration is installed
+separately. Follow the [integration installation steps](https://github.com/kyvaith/pipecat-homeassistant#installation)
+to install it from HACS or Marketplace, then add **Pipecat Assist** in
+**Settings > Devices & services**. The app URL is auto-detected through
+Supervisor when possible and remains editable for custom installations.
+The integration provides Conversation, STT, TTS, AI Tasks, and the Lovelace card.
