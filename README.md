@@ -82,22 +82,7 @@ The Supervisor app runs Pipecat. The separate Home Assistant integration
 adds the dashboard card, Assist, and AI Task entities. Install both for the
 full experience; HACS and Marketplace install only the integration.
 
-1. **Add the app repository to Home Assistant.**
-
-   [![Add the Pipecat Assist app repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fkyvaith%2Fpipecat-homeassistant)
-
-   Confirm the repository in Home Assistant. To add it manually, open the
-   app store (**Settings > Apps**, or **Add-ons** on older versions), select
-   **Repositories** from the top-right menu, and enter:
-
-   ```text
-   https://github.com/kyvaith/pipecat-homeassistant
-   ```
-
-2. Install and start **Pipecat Assist** from the **Pipecat Home Assistant**
-   section of the app store.
-
-3. **Open the companion integration in HACS or Marketplace.**
+1. **Open the companion integration in HACS or Marketplace.**
 
    [![Open the Pipecat Assist integration](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=kyvaith&repository=pipecat-homeassistant&category=integration)
 
@@ -106,13 +91,16 @@ full experience; HACS and Marketplace install only the integration.
    yet, add the same repository URL as a custom repository of type
    **Integration**.
 
-4. Install the integration and restart Home Assistant when prompted.
+2. Install the integration and restart Home Assistant when prompted.
 
-5. Add Pipecat Assist in **Settings > Devices & services**. The
-   integration should auto-detect the add-on URL; keep the detected value unless
-   you run the add-on in a custom network layout.
+3. Add **Pipecat Assist** in **Settings > Devices & services**. On Home
+   Assistant OS, select **Install and start Pipecat Assist** if the app is
+   missing. The wizard adds the app repository when needed, installs the app,
+   and connects once the server responds. If the app is already installed, the
+   wizard detects its URL or offers to start it. To use your own server, enter
+   its URL instead.
 
-6. In **Settings > Voice assistants**, select **Pipecat Assist** in all three
+4. In **Settings > Voice assistants**, select **Pipecat Assist** in all three
    categories:
 
    - Conversation agent / LLM
@@ -122,21 +110,28 @@ full experience; HACS and Marketplace install only the integration.
    Use the single Pipecat Assist language entry. The actual voice, language,
    and provider settings are configured inside the add-on pipeline.
 
-7. Optional: where your Home Assistant version exposes **AI Tasks** or **AI
+5. Optional: where your Home Assistant version exposes **AI Tasks** or **AI
    Actions**, select **Pipecat Assist** for LLM task handling, generated data,
    and image generation. Configure **Integrations > Google Imagen** or
    **Integrations > fal Image Generation** in the add-on, then choose the image
    provider in **Runtime > Image task provider** when you want a specific
    backend instead of the first enabled one.
 
-8. Open the Pipecat Assist add-on UI and configure a provider:
+6. Open the Pipecat Assist add-on UI and configure a provider:
 
    - Easiest start: create a Google AI Studio API key and paste it into
      **Integrations > Google Gemini Live**.
    - Advanced setup: create or edit a custom pipeline with your preferred cloud
      providers, local AI endpoints, and MCP servers.
 
-9. Add the **Pipecat Assist** Lovelace card to a dashboard and start talking.
+7. Add the **Pipecat Assist** Lovelace card to a dashboard and start talking.
+
+**Manual app installation:** Use the link below to open the repository prompt
+in Home Assistant. Confirm, then install and start **Pipecat Assist** from the
+**Pipecat Home Assistant** section of the app store. For older x86-64 CPUs that
+lack x86-64-v2 support, select **Pipecat Assist Legacy amd64** instead.
+
+[![Add the Pipecat Assist app repository](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fkyvaith%2Fpipecat-homeassistant)
 
 ## Screenshots
 
