@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Add HACS and Home Assistant Marketplace integration metadata.
+- Run HACS and Hassfest validation and document the separate app and integration installs.
+
 ## 0.2.2
 
 - Start dashboard audio playback in the original Talk button gesture. Keep the
