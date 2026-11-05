@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.7
+
+- Escape the dashboard card name before rendering it as HTML, preventing
+  configured markup and event handlers from being executed in the dashboard.
+- Add regression coverage for HTML payloads, special characters, and default
+  card names.
+
 ## 0.2.6
 
 - Support OpenAI GPT-Live microphone turns in classic Home Assistant Assist
