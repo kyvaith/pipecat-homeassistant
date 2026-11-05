@@ -1,4 +1,4 @@
-const PIPECAT_ASSIST_CARD_VERSION = "0.2.6";
+const PIPECAT_ASSIST_CARD_VERSION = "0.2.7";
 const DEFAULT_ACCENT_HEX = "#206cff";
 const DEFAULT_AUDIO_BUFFER_MS = 120;
 const STREAM_FADE_GROUPS = 4;
@@ -2148,7 +2148,7 @@ class PipecatAssistCard extends HTMLElement {
         <div class="${compact ? "wrap compact" : "wrap"}">
           <div class="head">
             <div class="title">
-              <h3>${this.config.name || "Pipecat Assist"}</h3>
+              <h3>${escapeHtml(this.config.name || "Pipecat Assist")}</h3>
               <span class="status-pill ${statusClass}">${escapeHtml(statusLabel)}</span>
             </div>
             <div class="actions">

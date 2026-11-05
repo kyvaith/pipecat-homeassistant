@@ -18,6 +18,26 @@ function cardClass() {
   return { Card, context };
 }
 
+test('dashboard names render as escaped text, not HTML', () => {
+  const { Card } = cardClass();
+  const card = new Card();
+  card.shadowRoot = { innerHTML: '', querySelector: () => ({}) };
+  card.syncTranscriptDom = card.ensureVisualizer = card.attachAudio = () => {};
+  const cases = [
+    ['<img src=x onerror="alert(1)">', '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;'],
+    ['</h3><svg onload=alert(1)>', '&lt;/h3&gt;&lt;svg onload=alert(1)&gt;'],
+    ['Kitchen & "Living" \'Room\'', 'Kitchen &amp; &quot;Living&quot; &#039;Room&#039;'],
+    ['Pipecat Assist', 'Pipecat Assist'],
+    ['', 'Pipecat Assist'],
+    [undefined, 'Pipecat Assist'],
+  ];
+  for (const [name, expected] of cases) {
+    card.config = { name };
+    card.render();
+    assert.equal(card.shadowRoot.innerHTML.match(/<h3>([\s\S]*?)<\/h3>/)[1], expected);
+  }
+});
+
 test('audio is primed before the first network or microphone await', async () => {
   const { Card, context } = cardClass();
   const card = new Card();
