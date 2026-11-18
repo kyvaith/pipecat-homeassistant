@@ -80,6 +80,48 @@ class LazyOpenAILiveTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(run, 5)
 
 
+    async def test_rejected_connect_is_retried_on_later_audio(self):
+        attempts, sessions = [], []
+
+        def reject_first(connection, request):
+            attempts.append(1)
+            if len(attempts) == 1:
+                return connection.respond(401, "Unauthorized")
+            return None
+
+        async def provider(socket):
+            sessions.append(json.loads(await socket.recv()))
+            await socket.send(json.dumps({"type": "session.started", "session": {"id": "s"}}))
+            async for raw in socket:
+                if json.loads(raw)["type"] == "session.close":
+                    await socket.send(json.dumps({"type": "session.closed", "reason": "close_requested"}))
+
+        async with serve(provider, "127.0.0.1", 0, process_request=reject_first) as server:
+            url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/v1/live/sessions"
+            config, flow, integration = gpt_config(url)
+            with patch("app.openai_live_lazy.RETRY_AFTER_FAIL_SECS", 0.3):
+                llm, _ = main._openai_live_service(
+                    config, flow, integration, None,
+                    service_class=functools.partial(LazyOpenAILiveLLMService, lazy=True),
+                )
+                user, assistant = LLMContextAggregatorPair(LLMContext())
+                worker = PipelineWorker(Pipeline([user, llm, assistant]), enable_rtvi=False)
+                run = asyncio.create_task(WorkerRunner(handle_sigint=False).run(worker))
+                await worker.queue_frame(LLMRunFrame())
+                frame = InputAudioRawFrame(b"\x01\x00" * 1600, 16000, 1)
+                await worker.queue_frame(frame)
+                async with asyncio.timeout(5):
+                    while not attempts:
+                        await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.5)
+                    while not sessions:
+                        await worker.queue_frame(frame)
+                        await asyncio.sleep(0.1)
+                self.assertTrue(llm.is_usable)
+                self.assertEqual(len(attempts), 2, "one retry after the back-off, not one per frame")
+                await worker.queue_frame(EndFrame())
+                await asyncio.wait_for(run, 5)
+
     def test_delegated_backend_uses_lowest_reasoning_unless_flow_sets_one(self):
         config, flow, integration = gpt_config("ws://127.0.0.1:1/v1/live/sessions")
         integration.default_model = "gpt-6-sol"

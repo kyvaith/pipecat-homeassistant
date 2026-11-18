@@ -15,6 +15,7 @@ IDLE_CLOSE_SECS = 15.0
 MAX_OPEN_IDLE_SECS = 120.0
 MAX_BUFFER_FRAMES = 1000  # ~10 s of 10-20 ms frames; older audio is dropped first
 TURN_GAP_SECS = 2.0  # mic silence after which the next audio counts as a new turn
+RETRY_AFTER_FAIL_SECS = 10.0  # mic audio arrives every 20 ms; don't reconnect per frame
 
 
 class LazyOpenAILiveLLMService(HAOpenAILiveLLMService):
@@ -32,6 +33,7 @@ class LazyOpenAILiveLLMService(HAOpenAILiveLLMService):
         self._turn_started_at = 0.0
         self._last_user_text_at = 0.0
         self._turn_answered = True
+        self._failed_at = float("-inf")
 
     def _now(self) -> float:
         return asyncio.get_running_loop().time()
@@ -47,6 +49,12 @@ class LazyOpenAILiveLLMService(HAOpenAILiveLLMService):
         self._opened_at = self._now()
         logger.info("GPT-Live lazy: opening connection on mic audio")
         await super()._connect()
+        if self._websocket is None:  # connect failed (e.g. 401); retry on a later wake
+            self._live_wanted = False
+            self._failed_at = self._now()
+            self._audio_buffer.clear()
+            await self.set_usable(True)  # Pipecat marks it permanent; new key or network may fix it
+            return
         if self._context is not None:
             self._needs_session_config = True
             await self._send_session_config()
@@ -92,9 +100,13 @@ class LazyOpenAILiveLLMService(HAOpenAILiveLLMService):
             self._turn_started_at, self._turn_answered = now, False
         self._last_input_at = now
         if not self._live_wanted:
+            if now - self._failed_at < RETRY_AFTER_FAIL_SECS:
+                return
             async with self._lifecycle_lock:  # waits for a close in progress
                 if not self._live_wanted:
                     await self._open_live()
+            if not self._live_wanted:
+                return
         if self._lazy and (self._audio_buffer or not self._session_started):
             self._audio_buffer.append(frame)
             del self._audio_buffer[:-MAX_BUFFER_FRAMES]
