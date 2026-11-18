@@ -8,6 +8,8 @@ LOG_LEVEL="$(bashio::config 'log_level')"
 export RUNNER_HOST
 export RUNNER_PORT
 export LOG_LEVEL
+GPT_LIVE_LAZY_CONNECT="$(bashio::config 'gpt_live_lazy_connect')"
+export GPT_LIVE_LAZY_CONNECT
 
 ARGS=(--host "$RUNNER_HOST" --port "$RUNNER_PORT" -t webrtc)
 

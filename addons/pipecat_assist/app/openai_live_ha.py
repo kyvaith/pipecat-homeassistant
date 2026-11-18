@@ -37,8 +37,40 @@ class LiveTurnResult:
     sample_rate: int
 
 
+def strict_nullable(schema):
+    """Rewrite OpenAPI-style ``nullable`` into a JSON Schema ``null`` type, recursively.
+
+    The delegated Responses model fills every parameter (strict function calling);
+    without a ``null`` option it invents junk like "," for optional fields.
+    """
+    if isinstance(schema, list):
+        return [strict_nullable(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    # Only a boolean "nullable" is the keyword; a property may itself be named "nullable".
+    out = {
+        key: strict_nullable(value)
+        for key, value in schema.items()
+        if not (key == "nullable" and isinstance(value, bool))
+    }
+    if schema.get("nullable") is True:
+        if isinstance(out.get("type"), str):
+            out["type"] = [out["type"], "null"]
+        elif isinstance(out.get("anyOf"), list):
+            out["anyOf"] = [*out["anyOf"], {"type": "null"}]
+    return out
+
+
 class HAOpenAILiveLLMService(OpenAILiveLLMService):
     """Observe Live turn progress without replacing Pipecat's delegation handling."""
+
+    async def _invocation_params(self):
+        params = await super()._invocation_params()
+        params["tools"] = [
+            {**tool, "parameters": strict_nullable(tool["parameters"])} if "parameters" in tool else tool
+            for tool in params.get("tools") or []
+        ]
+        return params
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

@@ -13,6 +13,7 @@ if ADDON_ROOT.is_dir():
     sys.path.insert(0, str(ADDON_ROOT))
 
 from app.va_pipecat_protocol import (  # noqa: E402
+    MAX_FOLLOW_UP_TURNS,
     PROTOCOL_NAME,
     PROTOCOL_VERSION,
     VaPipecatProtocol,
@@ -174,6 +175,28 @@ class VaPipecatProtocolTests(unittest.TestCase):
         decoded = base64.b64decode(final["text_b64"]).decode("utf-8")
         self.assertEqual(decoded, "Jak b\u0119dzie dzi\u015b wieczorem?")
         self.assertTrue(final["final"])
+
+    def test_background_speech_cannot_keep_follow_ups_open_forever(self):
+        self.protocol.client_action('{"type":"wake"}')
+        for _ in range(MAX_FOLLOW_UP_TURNS + 1):
+            self.protocol.on_rtvi_message(self.rtvi("user-started-speaking"))
+            self.protocol.on_rtvi_message(self.rtvi("bot-started-speaking"))
+        stopped = json.loads(self.protocol.on_rtvi_message(self.rtvi("user-started-speaking")))
+        self.assertEqual((stopped["type"], stopped["reason"]), ("interrupt", "stopped"))
+        self.assertIsNone(self.protocol.on_rtvi_message(self.rtvi("user-started-speaking")))
+        ended = json.loads(self.protocol.on_rtvi_message(self.rtvi("bot-stopped-speaking")))
+        self.assertTrue(ended["terminal"])
+        self.protocol.client_action('{"type":"wake"}')
+        self.assertEqual(self.protocol.follow_up_turns, 0)
+
+    def test_goodbye_cut_off_by_background_speech_still_ends(self):
+        protocol = VaPipecatProtocol(lambda *texts: "Tschüss" in " ".join(t or "" for t in texts))
+        protocol.client_action('{"type":"wake"}')
+        protocol.on_rtvi_message(self.rtvi("bot-started-speaking"))
+        protocol.on_rtvi_message(self.rtvi("bot-output", {"text": "Tschüss!"}))
+        stopped = json.loads(protocol.on_rtvi_message(self.rtvi("user-started-speaking")))
+        self.assertEqual(stopped["reason"], "stopped")
+        self.assertFalse(protocol.active)
 
     def test_terminal_reply_enters_thanks_instead_of_follow_up(self):
         protocol = VaPipecatProtocol(lambda *_texts: True)

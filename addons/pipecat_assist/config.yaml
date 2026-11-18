@@ -1,9 +1,8 @@
 name: Pipecat Assist
-version: "0.2.7"
+version: "0.2.7-lazy.11"
 slug: pipecat_assist
 description: Realtime Pipecat assistant for Home Assistant with MCP device control and ESP32 satellite support.
 url: https://github.com/kyvaith/pipecat-homeassistant
-image: ghcr.io/kyvaith/pipecat-homeassistant/pipecat-assist
 arch:
   - aarch64
   - amd64
@@ -20,6 +19,8 @@ hassio_role: manager
 options:
   runner_port: 7860
   log_level: "INFO"
+  gpt_live_lazy_connect: true
 schema:
   runner_port: port
   log_level: list(DEBUG|INFO|WARNING|ERROR)
+  gpt_live_lazy_connect: bool

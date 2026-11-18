@@ -1726,10 +1726,27 @@ function syncFlow(flow, config = null) {
     mcp_tool_allowlist: Array.isArray(flow.mcp_tool_allowlist)
       ? flow.mcp_tool_allowlist
       : String(flow.mcp_tool_allowlist || "")
-          .split(",")
+          .split(/[,\s]+/)
           .map((item) => item.trim())
           .filter(Boolean),
   };
+}
+
+// Read and control devices by voice; everything else stays out of every request.
+const VOICE_TOOL_PRESET = ["ha_search", "ha_get_state", "ha_call_service", "ha_bulk_control", "ha_list_floors_areas", "ha_get_history"];
+
+// Edits stay local until blur: syncFlow splits the text on every update, which would eat typed commas.
+function ToolAllowlistInput({ value, onCommit }) {
+  const [text, setText] = useState(value.join(", "));
+  return (
+    <textarea
+      rows={4}
+      placeholder="ha_search, ha_get_state, ha_call_service"
+      value={text}
+      onChange={(event) => setText(event.target.value)}
+      onBlur={() => onCommit(text)}
+    />
+  );
 }
 
 function kindLabel(kind) {
@@ -3134,9 +3151,32 @@ function PipelineView({
           </>
         )}
         {selectedStep?.kind === "tools" && (
-          <div className="empty-state">
-            MCP servers are configured globally in Integrations. Enable one or more MCP integrations there to expose tools to this pipeline.
-          </div>
+          <>
+            <div className="empty-state">
+              MCP servers are configured globally in Integrations. Enable one or more MCP integrations there to expose tools to this pipeline.
+            </div>
+            <div className="divider" />
+            <div className="form-grid">
+              <Field label={t("Allowed MCP tools")} wide>
+                <ToolAllowlistInput
+                  key={(flow.mcp_tool_allowlist || []).join(",")}
+                  value={flow.mcp_tool_allowlist || []}
+                  onCommit={(text) => updateFlow((draft) => ({ ...draft, mcp_tool_allowlist: text }))}
+                />
+              </Field>
+              <Button
+                icon={Wrench}
+                variant="secondary"
+                onClick={() => updateFlow((draft) => ({ ...draft, mcp_tool_allowlist: [...VOICE_TOOL_PRESET] }))}
+              >
+                {t("Voice preset")}
+              </Button>
+              <div className="empty-state wide">
+                Exact MCP tool names, separated by commas or new lines. Empty exposes every tool, and every tool
+                definition is sent to the model on each request, so a short list keeps requests small and cheap.
+              </div>
+            </div>
+          </>
         )}
       </section>
     </div>

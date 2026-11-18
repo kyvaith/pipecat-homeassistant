@@ -8,6 +8,7 @@ import base64
 import hashlib
 import hmac
 import json
+import functools
 import os
 import re
 import time
@@ -115,6 +116,7 @@ from app.openai_endpoint import (
 )
 from app.text_agent import run_text_conversation
 from app.va_pipecat import websocket_transport_params
+from app.openai_live_lazy import LazyOpenAILiveLLMService
 from app.va_pipecat_protocol import VaPipecatProtocol
 from app.web_search_tool import run_gemini_web_search, run_openai_web_search, web_search_schema
 
@@ -1982,7 +1984,8 @@ def _legacy_should_end_conversation(*texts: str | None) -> bool:
 
 
 def _conversation_end_text(text: str | None) -> str:
-    normalized = unicodedata.normalize("NFKD", str(text or "").replace("ł", "l").replace("Ł", "L"))
+    raw = str(text or "").replace("ł", "l").replace("Ł", "L").replace("ß", "ss")
+    normalized = unicodedata.normalize("NFKD", raw)
     ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
     ascii_text = re.sub(r"[^a-z0-9']+", " ", ascii_text)
     return re.sub(r"\s+", " ", ascii_text).strip()
@@ -2000,10 +2003,13 @@ def _should_end_conversation(*texts: str | None) -> bool:
         r"\b(end conversation|stop listening|we are done|goodbye|bye for now)\b",
         r"\b(milego dnia|do uslyszenia|do zobaczenia|na razie)\b",
         r"\b(have a nice day|talk to you later|see you later)\b",
+        r"\b(tschuss|auf wiedersehen|bis spater|bis bald|bis dann|ciao|mach.s gut|machs gut|schonen tag noch|schonen abend noch)\b",
+        r"\b(das war's|das wars|das war es|das ist alles)\b",
+        r"\b(gesprach beenden|beende das gesprach|gesprach ende|hor auf zuzuhoren)\b",
     )
     short_end_pattern = re.compile(
-        r"^(?:ok|okej|dobra|no|dziekuje|dzieki|thanks|thank you)?\s*"
-        r"(?:koniec|wystarczy|goodbye|bye)\s*$"
+        r"^(?:ok|okej|okay|dobra|no|dziekuje|dzieki|thanks|thank you|danke)?\s*"
+        r"(?:koniec|wystarczy|goodbye|bye|ende|fertig|stopp|stop)\s*$"
     )
     for text in texts:
         clean = _conversation_end_text(text)
@@ -5140,7 +5146,12 @@ def _openai_live_service(
     *, service_class=None,
 ):
     from pipecat.services.openai.live.llm import OpenAILiveLLMService
-    from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
+    from pipecat.services.openai.responses.llm import (
+        _THINKING_DEFAULTS,  # shortcut: private Pipecat table, pinned 1.14.0; recheck on upgrade
+        OpenAIResponsesLLMService,
+        OpenAIResponsesReasoningConfig,
+    )
+    from pipecat.services.openai.responses.llm import _model_name as _responses_model_name
     from pipecat.workers.llm.backend_llm_worker import BackendLLMWorker
 
     backend = _openai_live_backend(config, integration)
@@ -5153,10 +5164,15 @@ def _openai_live_service(
             backend=BackendLLMWorker(llm=tool_target, context=context)
         )
     else:
+        backend_model = integration.default_model or DEFAULT_OPENAI_TEXT_MODEL
+        # The delegation sends no reasoning unless set, so OpenAI's (slow) default applied;
+        # use the flow's effort, else the model's lowest, as OpenAIResponsesLLMService does.
+        effort = flow.reasoning_effort or _THINKING_DEFAULTS.get(_responses_model_name(backend_model))
         delegation = OpenAILiveLLMService.ResponsesDelegation(
             settings=OpenAIResponsesLLMService.Settings(
-                model=integration.default_model or DEFAULT_OPENAI_TEXT_MODEL,
+                model=backend_model,
                 system_instruction=instructions,
+                **({"reasoning": OpenAIResponsesReasoningConfig(effort=effort)} if effort else {}),
             )
         )
     llm = (service_class or OpenAILiveLLMService)(
@@ -5493,7 +5509,13 @@ async def _run_bot_session(
         if provider_kind == "openai_live":
             integration = _require_integration(integration, "GPT-Live")
             realtime_model = integration.default_realtime_model or DEFAULT_OPENAI_LIVE_MODEL
-            llm, tool_target = _openai_live_service(config, flow, integration, tools_schema)
+            service_class = None
+            if is_esphome_satellite:
+                lazy = os.getenv("GPT_LIVE_LAZY_CONNECT", "true").lower() == "true"
+                service_class = functools.partial(LazyOpenAILiveLLMService, lazy=lazy)
+            llm, tool_target = _openai_live_service(
+                config, flow, integration, tools_schema, service_class=service_class
+            )
         elif provider_kind == "aws_nova_sonic":
             integration = _require_integration(
                 integration,
