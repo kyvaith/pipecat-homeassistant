@@ -11,7 +11,7 @@ from app.main import _should_end_conversation
 
 class ConversationEndTests(unittest.TestCase):
     def test_german_farewells_end(self):
-        for text in ("Tschüss!", "Tschüß", "Danke, das war's.", "Das wars", "Ende.", "Okay, fertig",
+        for text in ("Tschüss!", "Gern geschehen, bis dann!", "Mach's gut.", "Einen schönen Tag noch!", "Tschüß", "Danke, das war's.", "Das wars", "Ende.", "Okay, fertig",
                      "Gespräch beenden", "Bis später!", "Auf Wiedersehen"):
             self.assertTrue(_should_end_conversation(text), text)
 

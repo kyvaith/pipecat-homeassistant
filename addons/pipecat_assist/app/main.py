@@ -2003,7 +2003,7 @@ def _should_end_conversation(*texts: str | None) -> bool:
         r"\b(end conversation|stop listening|we are done|goodbye|bye for now)\b",
         r"\b(milego dnia|do uslyszenia|do zobaczenia|na razie)\b",
         r"\b(have a nice day|talk to you later|see you later)\b",
-        r"\b(tschuss|auf wiedersehen|bis spater|bis bald|ciao)\b",
+        r"\b(tschuss|auf wiedersehen|bis spater|bis bald|bis dann|ciao|mach.s gut|machs gut|schonen tag noch|schonen abend noch)\b",
         r"\b(das war's|das wars|das war es|das ist alles)\b",
         r"\b(gesprach beenden|beende das gesprach|gesprach ende|hor auf zuzuhoren)\b",
     )
