@@ -189,6 +189,15 @@ class VaPipecatProtocolTests(unittest.TestCase):
         self.protocol.client_action('{"type":"wake"}')
         self.assertEqual(self.protocol.follow_up_turns, 0)
 
+    def test_goodbye_cut_off_by_background_speech_still_ends(self):
+        protocol = VaPipecatProtocol(lambda *texts: "Tschüss" in " ".join(t or "" for t in texts))
+        protocol.client_action('{"type":"wake"}')
+        protocol.on_rtvi_message(self.rtvi("bot-started-speaking"))
+        protocol.on_rtvi_message(self.rtvi("bot-output", {"text": "Tschüss!"}))
+        stopped = json.loads(protocol.on_rtvi_message(self.rtvi("user-started-speaking")))
+        self.assertEqual(stopped["reason"], "stopped")
+        self.assertFalse(protocol.active)
+
     def test_terminal_reply_enters_thanks_instead_of_follow_up(self):
         protocol = VaPipecatProtocol(lambda *_texts: True)
         protocol.client_action('{"type":"wake"}')
