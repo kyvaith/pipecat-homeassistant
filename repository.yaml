@@ -1,3 +1,4 @@
-name: Pipecat Home Assistant (lazy GPT-Live fork)
-url: https://github.com/StefanW86/pipecat-homeassistant
-maintainer: StefanW86
+name: Pipecat Home Assistant
+url: https://github.com/kyvaith/pipecat-homeassistant
+maintainer: kyvaith
+
