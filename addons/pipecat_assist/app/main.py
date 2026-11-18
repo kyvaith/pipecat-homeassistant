@@ -1984,7 +1984,8 @@ def _legacy_should_end_conversation(*texts: str | None) -> bool:
 
 
 def _conversation_end_text(text: str | None) -> str:
-    normalized = unicodedata.normalize("NFKD", str(text or "").replace("ł", "l").replace("Ł", "L"))
+    raw = str(text or "").replace("ł", "l").replace("Ł", "L").replace("ß", "ss")
+    normalized = unicodedata.normalize("NFKD", raw)
     ascii_text = normalized.encode("ascii", "ignore").decode("ascii").lower()
     ascii_text = re.sub(r"[^a-z0-9']+", " ", ascii_text)
     return re.sub(r"\s+", " ", ascii_text).strip()
@@ -2002,10 +2003,13 @@ def _should_end_conversation(*texts: str | None) -> bool:
         r"\b(end conversation|stop listening|we are done|goodbye|bye for now)\b",
         r"\b(milego dnia|do uslyszenia|do zobaczenia|na razie)\b",
         r"\b(have a nice day|talk to you later|see you later)\b",
+        r"\b(tschuss|auf wiedersehen|bis spater|bis bald|ciao)\b",
+        r"\b(das war's|das wars|das war es|das ist alles)\b",
+        r"\b(gesprach beenden|beende das gesprach|gesprach ende|hor auf zuzuhoren)\b",
     )
     short_end_pattern = re.compile(
-        r"^(?:ok|okej|dobra|no|dziekuje|dzieki|thanks|thank you)?\s*"
-        r"(?:koniec|wystarczy|goodbye|bye)\s*$"
+        r"^(?:ok|okej|okay|dobra|no|dziekuje|dzieki|thanks|thank you|danke)?\s*"
+        r"(?:koniec|wystarczy|goodbye|bye|ende|fertig|stopp|stop)\s*$"
     )
     for text in texts:
         clean = _conversation_end_text(text)
