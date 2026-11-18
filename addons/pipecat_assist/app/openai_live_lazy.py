@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import audioop
+import base64
 
 from loguru import logger
 from pipecat.services.openai.live import events
 
-from app.openai_live_ha import HAOpenAILiveLLMService
+from app.openai_live_ha import VOICE_RMS, HAOpenAILiveLLMService
 
 IDLE_CLOSE_SECS = 15.0
+MAX_OPEN_IDLE_SECS = 120.0
 MAX_BUFFER_FRAMES = 1000  # ~10 s of 10-20 ms frames; older audio is dropped first
 TURN_GAP_SECS = 2.0  # mic silence after which the next audio counts as a new turn
 
@@ -61,11 +64,24 @@ class LazyOpenAILiveLLMService(HAOpenAILiveLLMService):
 
     async def _idle_watch(self):
         try:
+            tick = 0
             while True:
                 await asyncio.sleep(1.0)
-                last = max(self._last_input_at, self.assist_activity_at)
-                if self._now() - last >= IDLE_CLOSE_SECS and not self.assist_delegating:
+                tick += 1
+                now = self._now()
+                mic_idle = now - self._last_input_at
+                activity_idle = now - self.assist_activity_at
+                if min(mic_idle, activity_idle) >= IDLE_CLOSE_SECS and not self.assist_delegating:
                     break
+                # Safety net: a stuck delegation flag must not keep the socket open forever.
+                if min(mic_idle, activity_idle) >= MAX_OPEN_IDLE_SECS:
+                    logger.warning("GPT-Live lazy: closing despite pending delegation state")
+                    break
+                if tick % 10 == 0:
+                    logger.info(
+                        "GPT-Live lazy: still open, mic idle {:.0f}s, activity idle {:.0f}s, delegating={}",
+                        mic_idle, activity_idle, self.assist_delegating,
+                    )
         finally:
             self._idle_task = None
         await self._close_live()
@@ -98,7 +114,11 @@ class LazyOpenAILiveLLMService(HAOpenAILiveLLMService):
     async def _handle_server_event(self, evt):
         if isinstance(evt, events.TranscriptDeltaEvent) and evt.role == "user" and evt.delta:
             self._last_user_text_at = self._now()
-        elif isinstance(evt, events.OutputAudioDeltaEvent) and not self._turn_answered:
+        elif (
+            isinstance(evt, events.OutputAudioDeltaEvent) and not self._turn_answered
+            # Live streams silence continuously; only voiced audio is the answer.
+            and audioop.rms(base64.b64decode(evt.delta), 2) >= VOICE_RMS
+        ):
             self._turn_answered = True
             now = self._now()
             logger.info(
