@@ -5146,7 +5146,12 @@ def _openai_live_service(
     *, service_class=None,
 ):
     from pipecat.services.openai.live.llm import OpenAILiveLLMService
-    from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
+    from pipecat.services.openai.responses.llm import (
+        _THINKING_DEFAULTS,  # shortcut: private Pipecat table, pinned 1.14.0; recheck on upgrade
+        OpenAIResponsesLLMService,
+        OpenAIResponsesReasoningConfig,
+    )
+    from pipecat.services.openai.responses.llm import _model_name as _responses_model_name
     from pipecat.workers.llm.backend_llm_worker import BackendLLMWorker
 
     backend = _openai_live_backend(config, integration)
@@ -5159,10 +5164,15 @@ def _openai_live_service(
             backend=BackendLLMWorker(llm=tool_target, context=context)
         )
     else:
+        backend_model = integration.default_model or DEFAULT_OPENAI_TEXT_MODEL
+        # The delegation sends no reasoning unless set, so OpenAI's (slow) default applied;
+        # use the flow's effort, else the model's lowest, as OpenAIResponsesLLMService does.
+        effort = flow.reasoning_effort or _THINKING_DEFAULTS.get(_responses_model_name(backend_model))
         delegation = OpenAILiveLLMService.ResponsesDelegation(
             settings=OpenAIResponsesLLMService.Settings(
-                model=integration.default_model or DEFAULT_OPENAI_TEXT_MODEL,
+                model=backend_model,
                 system_instruction=instructions,
+                **({"reasoning": OpenAIResponsesReasoningConfig(effort=effort)} if effort else {}),
             )
         )
     llm = (service_class or OpenAILiveLLMService)(

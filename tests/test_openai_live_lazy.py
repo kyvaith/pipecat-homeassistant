@@ -80,5 +80,15 @@ class LazyOpenAILiveTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(run, 5)
 
 
+    def test_delegated_backend_uses_lowest_reasoning_unless_flow_sets_one(self):
+        config, flow, integration = gpt_config("ws://127.0.0.1:1/v1/live/sessions")
+        integration.default_model = "gpt-6-sol"
+        llm, _ = main._openai_live_service(config, flow, integration, None)
+        self.assertEqual(llm._delegation.settings.reasoning.effort, "none")
+        flow.reasoning_effort = "low"
+        llm, _ = main._openai_live_service(config, flow, integration, None)
+        self.assertEqual(llm._delegation.settings.reasoning.effort, "low")
+
+
 if __name__ == "__main__":
     unittest.main()
