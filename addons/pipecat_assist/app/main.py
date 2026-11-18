@@ -8,6 +8,7 @@ import base64
 import hashlib
 import hmac
 import json
+import functools
 import os
 import re
 import time
@@ -115,6 +116,7 @@ from app.openai_endpoint import (
 )
 from app.text_agent import run_text_conversation
 from app.va_pipecat import websocket_transport_params
+from app.openai_live_lazy import LazyOpenAILiveLLMService
 from app.va_pipecat_protocol import VaPipecatProtocol
 from app.web_search_tool import run_gemini_web_search, run_openai_web_search, web_search_schema
 
@@ -5493,7 +5495,13 @@ async def _run_bot_session(
         if provider_kind == "openai_live":
             integration = _require_integration(integration, "GPT-Live")
             realtime_model = integration.default_realtime_model or DEFAULT_OPENAI_LIVE_MODEL
-            llm, tool_target = _openai_live_service(config, flow, integration, tools_schema)
+            service_class = None
+            if is_esphome_satellite:
+                lazy = os.getenv("GPT_LIVE_LAZY_CONNECT", "true").lower() == "true"
+                service_class = functools.partial(LazyOpenAILiveLLMService, lazy=lazy)
+            llm, tool_target = _openai_live_service(
+                config, flow, integration, tools_schema, service_class=service_class
+            )
         elif provider_kind == "aws_nova_sonic":
             integration = _require_integration(
                 integration,

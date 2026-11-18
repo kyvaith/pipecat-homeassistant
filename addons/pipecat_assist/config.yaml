@@ -20,6 +20,8 @@ hassio_role: manager
 options:
   runner_port: 7860
   log_level: "INFO"
+  gpt_live_lazy_connect: true
 schema:
   runner_port: port
   log_level: list(DEBUG|INFO|WARNING|ERROR)
+  gpt_live_lazy_connect: bool
