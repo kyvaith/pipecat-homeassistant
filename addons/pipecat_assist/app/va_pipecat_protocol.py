@@ -13,6 +13,9 @@ PROTOCOL_NAME = "va-pipecat"
 PROTOCOL_VERSION = 1
 USER_PHRASE_WORDS = 4
 ASSISTANT_PHRASE_WORDS = 6
+# Follow-up user turns allowed after one wake; background speech (radio, TV)
+# otherwise keeps a handsfree conversation alive forever.
+MAX_FOLLOW_UP_TURNS = 3
 
 
 def _compact_json(payload: dict[str, Any]) -> str:
@@ -86,6 +89,8 @@ class VaPipecatProtocol:
     assistant_priority: int = 0
     active_tool_calls: set[str] = field(default_factory=set)
     tool_start_pending: bool = False
+    follow_up_turns: int = 0
+    bot_spoke: bool = False
 
     def hello(self) -> str:
         """Return the server capability handshake."""
@@ -139,6 +144,8 @@ class VaPipecatProtocol:
             self.assistant_priority = 0
             self.active_tool_calls.clear()
             self.tool_start_pending = False
+            self.follow_up_turns = 0
+            self.bot_spoke = False
             return "wake"
         if message_type == "interrupt":
             self.stop_requested = False
@@ -231,6 +238,15 @@ class VaPipecatProtocol:
         data = data if isinstance(data, dict) else {}
 
         if message_type in {"user-started-speaking", "vad-user-started-speaking"}:
+            if self.bot_spoke:
+                self.bot_spoke = False
+                self.follow_up_turns += 1
+                if self.follow_up_turns == MAX_FOLLOW_UP_TURNS + 1:
+                    self.active = False
+                    self.current_phase = "idle"
+                    return self.interrupt_message("stopped")
+            if self.follow_up_turns > MAX_FOLLOW_UP_TURNS:
+                return None  # capped: stay closed until the next wake
             self.active = True
             self.stop_requested = False
             self.user_text = ""
@@ -289,6 +305,7 @@ class VaPipecatProtocol:
             return self.phase_message("thinking")
 
         if message_type == "bot-started-speaking":
+            self.bot_spoke = True
             return self.phase_message("speaking")
 
         if message_type in {
@@ -342,7 +359,7 @@ class VaPipecatProtocol:
             if self.active_tool_calls or self.tool_start_pending:
                 return self.phase_message("thinking")
             assistant_text = self.assistant_text
-            terminal = self.stop_requested or self.should_end_conversation(
+            terminal = self.stop_requested or self.follow_up_turns > MAX_FOLLOW_UP_TURNS or self.should_end_conversation(
                 self.last_user_text,
                 assistant_text,
             )
