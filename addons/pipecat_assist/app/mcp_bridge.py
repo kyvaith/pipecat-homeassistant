@@ -191,6 +191,15 @@ def _sanitize_tools_schema(tools: ToolsSchema) -> ToolsSchema:
     )
 
 
+def _drop_empty_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Omit blank optional values the delegated Live backend fills into every parameter.
+
+    shortcut: an intentional '' (e.g. ha_set_entity area_id='' to unassign) becomes a no-op;
+    pass the tool's required list here if that ever matters.
+    """
+    return {key: value for key, value in arguments.items() if value not in ("", None, [], {})}
+
+
 def _new_history_item(name: str, arguments: dict[str, Any]) -> tuple[dict[str, Any], float]:
     return (
         {
@@ -423,7 +432,7 @@ class HomeAssistantMCPBridge:
             raise RuntimeError("MCP bridge is not started")
         for tool in tools.standard_tools:
             async def handler(params, *, name=tool.name):
-                result = await self.call_tool(name, dict(params.arguments or {}))
+                result = await self.call_tool(name, _drop_empty_arguments(dict(params.arguments or {})))
                 await params.result_callback(result)
 
             llm.register_function(tool.name, handler)
@@ -572,7 +581,7 @@ class CombinedMCPBridge:
 
         for public_name in self._tool_routes:
             async def handler(params, *, name=public_name) -> None:
-                result = await self.call_tool(name, dict(params.arguments or {}))
+                result = await self.call_tool(name, _drop_empty_arguments(dict(params.arguments or {})))
                 await params.result_callback(result)
 
             llm.register_function(public_name, handler)
